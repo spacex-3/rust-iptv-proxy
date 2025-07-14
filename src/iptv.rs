@@ -17,6 +17,20 @@ use std::{
 };
 use tokio::task::JoinSet;
 
+fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
+    let mut mapping = HashMap::new();
+    for pair in mapping_str.split(',') {
+        if let Some((from, to)) = pair.split_once('=') {
+            mapping.insert(from.trim().to_string(), to.trim().to_string());
+        }
+    }
+    mapping
+}
+
+fn get_mapped_channel_name(channel_name: &str, mapping: &HashMap<String, String>) -> String {
+    mapping.get(channel_name).cloned().unwrap_or_else(|| channel_name.to_string())
+}
+
 fn get_client_with_if(#[allow(unused_variables)] if_name: Option<&str>) -> Result<Client> {
     let timeout = Duration::new(5, 0);
     #[allow(unused_mut)]
@@ -279,14 +293,33 @@ pub(crate) async fn get_channels(
 
 pub(crate) async fn get_icon(args: &Args, id: &str) -> Result<Vec<u8>> {
     let client = get_client_with_if(args.interface.as_deref())?;
-
     let base_url = get_base_url(&client, args).await?;
 
+    // 先尝试用原始 ID 获取图标
     let url = reqwest::Url::parse(&format!(
         "{base_url}/EPG/jsp/iptvsnmv3/en/list/images/channelIcon/{}.png",
         id
     ))?;
 
-    let response = client.get(url).send().await?.error_for_status()?;
-    Ok(response.bytes().await?.to_vec())
+    let response = client.get(url).send().await;
+    
+    match response {
+        Ok(resp) => {
+            match resp.error_for_status() {
+                Ok(resp) => Ok(resp.bytes().await?.to_vec()),
+                Err(_) => {
+                    // 如果获取失败，尝试使用映射
+                    if let Some(mapping_str) = &args.channel_mapping {
+                        let mapping = parse_channel_mapping(mapping_str);
+                        // 这里需要实现通过频道名查找对应ID的逻辑
+                        // 暂时返回错误，后续可以完善
+                        Err(anyhow!("Icon not found for id: {}", id))
+                    } else {
+                        Err(anyhow!("Icon not found for id: {}", id))
+                    }
+                }
+            }
+        }
+        Err(e) => Err(anyhow!("Network error: {}", e))
+    }
 }

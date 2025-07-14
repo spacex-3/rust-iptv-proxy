@@ -9,7 +9,7 @@ use chrono::{FixedOffset, TimeZone, Utc};
 use log::debug;
 use reqwest::Client;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     io::{BufWriter, Cursor, Read},
     net::SocketAddrV4,
     process::exit,
@@ -33,6 +33,30 @@ mod proxy;
 static OLD_PLAYLIST: Mutex<Option<String>> = Mutex::new(None);
 static OLD_XMLTV: Mutex<Option<String>> = Mutex::new(None);
 
+fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
+    let mut mapping = HashMap::new();
+    for pair in mapping_str.split(',') {
+        if let Some((from, to)) = pair.split_once('=') {
+            mapping.insert(from.trim().to_string(), to.trim().to_string());
+        }
+    }
+    mapping
+}
+
+fn find_mapped_channel_id(channel_name: &str, channels: &[Channel], mapping: &HashMap<String, String>) -> u64 {
+    // 先尝试映射
+    if let Some(mapped_name) = mapping.get(channel_name) {
+        // 查找映射后的频道名对应的ID
+        for ch in channels {
+            if ch.name == *mapped_name {
+                return ch.id;
+            }
+        }
+    }
+    // 如果没有映射或者映射的频道不存在，返回0作为默认值
+    0
+}
+
 fn to_xmltv_time(unix_time: i64) -> Result<String> {
     match Utc.timestamp_millis_opt(unix_time) {
         chrono::LocalResult::Single(t) => Ok(t
@@ -43,7 +67,7 @@ fn to_xmltv_time(unix_time: i64) -> Result<String> {
     }
 }
 
-fn to_xmltv<R: Read>(channels: Vec<Channel>, extra: Option<EventReader<R>>) -> Result<String> {
+fn to_xmltv<R: Read>(channels: Vec<Channel>, extra: Option<EventReader<R>>, mapping: &HashMap<String, String>) -> Result<String> {
     let mut buf = BufWriter::new(Vec::new());
     let mut writer = EmitterConfig::new()
         .perform_indent(false)
@@ -139,6 +163,32 @@ fn to_xmltv<R: Read>(channels: Vec<Channel>, extra: Option<EventReader<R>>) -> R
             }
             writer.write(XmlWriteEvent::end_element())?;
         }
+        
+        // 如果当前频道没有EPG数据，尝试使用映射频道的EPG数据
+        if channel.epg.is_empty() {
+            if let Some(mapped_name) = mapping.get(&channel.name) {
+                // 查找映射的频道
+                if let Some(mapped_channel) = channels.iter().find(|ch| ch.name == *mapped_name) {
+                    for epg in mapped_channel.epg.iter() {
+                        writer.write(
+                            XmlWriteEvent::start_element("programme")
+                                .attr("start", &format!("{} +0800", to_xmltv_time(epg.start)?))
+                                .attr("stop", &format!("{} +0800", to_xmltv_time(epg.stop)?))
+                                .attr("channel", &format!("{}", channel.id)), // 使用当前频道的ID
+                        )?;
+                        writer.write(XmlWriteEvent::start_element("title").attr("lang", "chi"))?;
+                        writer.write(XmlWriteEvent::characters(&epg.title))?;
+                        writer.write(XmlWriteEvent::end_element())?;
+                        if !epg.desc.is_empty() {
+                            writer.write(XmlWriteEvent::start_element("desc"))?;
+                            writer.write(XmlWriteEvent::characters(&epg.desc))?;
+                            writer.write(XmlWriteEvent::end_element())?;
+                        }
+                        writer.write(XmlWriteEvent::end_element())?;
+                    }
+                }
+            }
+        }
     }
     writer.write(XmlWriteEvent::end_element())?;
     Ok(String::from_utf8(buf.into_inner()?)?)
@@ -162,9 +212,14 @@ async fn xmltv(args: Data<Args>, req: HttpRequest) -> impl Responder {
         Some(u) => parse_extra_xml(u).await.ok(),
         None => None,
     };
+    
+    let mapping = args.channel_mapping.as_ref()
+        .map(|s| parse_channel_mapping(s))
+        .unwrap_or_default();
+        
     let xml = get_channels(&args, true, &scheme, &host)
         .await
-        .and_then(|ch| to_xmltv(ch, extra_xml));
+        .and_then(|ch| to_xmltv(ch, extra_xml, &mapping));
     match xml {
         Err(e) => {
             if let Some(old_xmltv) = OLD_XMLTV.try_lock().ok().and_then(|f| f.to_owned()) {
@@ -213,9 +268,14 @@ async fn playlist(args: Data<Args>, req: HttpRequest) -> impl Responder {
             }
         }
         Ok(ch) => {
+            // 解析频道映射配置
+            let mapping = args.channel_mapping.as_ref()
+                .map(|s| parse_channel_mapping(s))
+                .unwrap_or_default();
+                
             let playlist = String::from("#EXTM3U\n")
                 + &ch
-                    .into_iter()
+                    .iter()
                     .map(|c| {
                         let group = if c.name.contains("超清") {
                             "超清频道"
@@ -226,9 +286,14 @@ async fn playlist(args: Data<Args>, req: HttpRequest) -> impl Responder {
                         };
                         let catch_up = format!(r#" catchup="append" catchup-source="{}?playseek=${{(b)yyyyMMddHHmmss}}-${{(e)yyyyMMddHHmmss}}" "#,
                             c.igmp.as_ref().map(|_| &c.rtsp).unwrap_or(&"".to_string()));
+                        
+                        // 查找映射的频道ID用于 logo 和 EPG
+                        let mapped_id = find_mapped_channel_id(&c.name, &ch, &mapping);
+                        let logo_id = if mapped_id != 0 { mapped_id } else { c.id };
+                        
                         format!(
                             r#"#EXTINF:-1 tvg-id="{0}" tvg-name="{1}" tvg-chno="{0}"{3}tvg-logo="{4}://{5}/logo/{6}.png" group-title="{2}",{1}"#,
-                            c.id, c.name, group, catch_up, scheme, host, c.id
+                            c.id, c.name, group, catch_up, scheme, host, logo_id
                         ) + "\n" + if args.udp_proxy { c.igmp.as_ref().unwrap_or(&c.rtsp) } else { &c.rtsp }
                     })
                     .collect::<Vec<_>>()
@@ -288,6 +353,7 @@ Options:
     -I, --interface <INTERFACE>            Interface to request
         --extra-playlist <EXTRA_PLAYLIST>  Url to extra m3u
         --extra-xmltv <EXTRA_XMLTV>        Url to extra xmltv
+        --channel-mapping <MAPPING>        Channel name mapping (format: "from1=to1,from2=to2")
         --udp-proxy                        Use UDP proxy
         --rtsp-proxy                       Use rtsp proxy
     -h, --help                             Print help
@@ -314,8 +380,10 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
+    let bind_addr = args.bind.clone();
+    
     HttpServer::new(move || {
-        let args = Data::new(argh::from_env::<Args>());
+        let args = Data::new(args.clone());
         App::new()
             .service(xmltv)
             .service(playlist)
@@ -324,7 +392,7 @@ async fn main() -> std::io::Result<()> {
             .service(udp)
             .app_data(args)
     })
-    .bind(args.bind)?
+    .bind(bind_addr)?
     .run()
     .await
 }

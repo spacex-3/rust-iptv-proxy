@@ -29,6 +29,9 @@ pub(crate) struct Args {
     #[argh(option)]
     pub(crate) extra_xmltv: Option<String>,
 
+    #[argh(option)]
+    pub(crate) channel_mapping: Option<String>,
+
     #[argh(switch)]
     pub(crate) udp_proxy: bool,
 
