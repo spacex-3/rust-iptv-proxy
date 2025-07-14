@@ -367,18 +367,9 @@ Options:
 #[actix_web::main] // or #[tokio::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
-    let args = std::env::args().collect::<Vec<_>>();
-    let args = args.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let args: &[&str] = args.as_ref();
-    if args.is_empty() {
-        return usage("iptv");
-    }
-    let args = match Args::from_args(&args[0..1], &args[1..]) {
-        Ok(args) => args,
-        Err(_) => {
-            return usage(args[0]);
-        }
-    };
+    
+    // 使用 argh 直接从环境解析参数
+    let args: Args = argh::from_env();
 
     let bind_addr = args.bind.clone();
     
