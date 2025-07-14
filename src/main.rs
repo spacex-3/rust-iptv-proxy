@@ -277,9 +277,9 @@ async fn playlist(args: Data<Args>, req: HttpRequest) -> impl Responder {
                 + &ch
                     .iter()
                     .map(|c| {
-                        let group = if c.name.contains("超清") {
+                        let group = if c.name.contains("超高清") || c.name.contains("4K") {
                             "超清频道"
-                        } else if c.name.contains("高清") {
+                        } else if c.name.contains("高清") || c.name.contains("超清") || c.name.contains("卫视") {
                             "高清频道"
                         } else {
                             "普通频道"
