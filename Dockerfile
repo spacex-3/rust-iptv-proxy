@@ -6,7 +6,7 @@ WORKDIR /app
 
 # 复制依赖文件
 COPY Cargo.toml Cargo.lock ./
-
+RUN cargo --version
 # 创建一个虚拟的 main.rs 来预编译依赖项
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release
@@ -15,7 +15,6 @@ RUN rm src/main.rs
 # 复制源代码
 COPY src ./src
 
-RUN cargo --version
 
 # 构建应用程序
 RUN cargo build --release
