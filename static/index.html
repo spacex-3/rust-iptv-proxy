@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPTV 节目管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        body.dark-mode {
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+
+        body.dark-mode .header {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 300;
+            margin-bottom: 0.5rem;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .links {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .filter-section {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .filter-btn {
+            background: #6c757d;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 13px;
+        }
+
+        .filter-btn:hover {
+            background: #5a6268;
+        }
+
+        .filter-btn.active {
+            background: #667eea;
+        }
+
+        .filter-btn.active:hover {
+            background: #5a6fd8;
+        }
+
+        .link {
+            padding: 12px 24px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            font-size: 14px;
+        }
+
+        .link:hover {
+            background: #0056b3;
+            transform: translateY(-1px);
+        }
+
+        .theme-toggle {
+            background: none;
+            border: 2px solid #ddd;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 14px;
+            color: #666;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .theme-toggle:hover {
+            background: #f8f9fa;
+            border-color: #aaa;
+        }
+
+        body.dark-mode .theme-toggle {
+            border-color: #4a5568;
+            color: #cbd5e0;
+        }
+
+        body.dark-mode .theme-toggle:hover {
+            background: #4a5568;
+            border-color: #718096;
+        }
+
+        .copy-toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+            z-index: 1000;
+            font-weight: 500;
+        }
+
+        .copy-toast.show {
+            transform: translateX(0);
+        }
+
+        .channels {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 20px;
+        }
+
+        .channel {
+            background: white;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: 2px solid transparent;
+        }
+
+        body.dark-mode .channel {
+            background: #2d3748;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .channel:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+            border-color: #667eea;
+        }
+
+        body.dark-mode .channel:hover {
+            box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+        }
+
+        .channel-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .channel-logo {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            object-fit: cover;
+            background: #4a5568;
+            border: 1px solid #718096;
+            flex-shrink: 0;
+        }
+
+        .no-logo-indicator {
+            width: 50px;
+            height: 50px;
+            border-radius: 8px;
+            background: #f44336;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        .no-logo-indicator:hover {
+            background: #d32f2f;
+            transform: scale(1.1);
+        }
+
+        .channel h3 {
+            margin: 0 0 15px 0;
+            color: #333;
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        body.dark-mode .channel h3 {
+            color: #f7fafc;
+        }
+
+        .channel p {
+            margin: 8px 0;
+            line-height: 1.5;
+            color: #666;
+        }
+
+        body.dark-mode .channel p {
+            color: #cbd5e0;
+        }
+
+        .channel strong {
+            color: #333;
+            font-weight: 600;
+        }
+
+        body.dark-mode .channel strong {
+            color: #f7fafc;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        body.dark-mode .loading {
+            color: #cbd5e0;
+        }
+
+        .error {
+            text-align: center;
+            padding: 50px;
+            color: #e74c3c;
+            font-size: 1.1rem;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .epg-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 2000;
+            backdrop-filter: blur(4px);
+        }
+
+        .epg-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 90%;
+            transition: background-color 0.3s ease;
+        }
+
+        body.dark-mode .epg-content {
+            background: #2d3748;
+        }
+
+        .epg-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #f0f0f0;
+        }
+
+        body.dark-mode .epg-header {
+            border-bottom-color: #4a5568;
+        }
+
+        .mapping-section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            border-left: 4px solid #667eea;
+        }
+
+        body.dark-mode .mapping-section {
+            background: #4a5568;
+            border-left-color: #cbd5e0;
+        }
+
+        .mapping-label {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+
+        body.dark-mode .mapping-label {
+            color: #cbd5e0;
+        }
+
+        .mapping-select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: white;
+            font-size: 0.9rem;
+        }
+
+        body.dark-mode .mapping-select {
+            background: #2d3748;
+            border-color: #4a5568;
+            color: #f7fafc;
+        }
+
+        .mapping-select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+
+        .epg-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #333;
+        }
+
+        body.dark-mode .epg-title {
+            color: #f7fafc;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 2rem;
+            cursor: pointer;
+            color: #666;
+            padding: 0;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .close-btn:hover {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        body.dark-mode .close-btn {
+            color: #cbd5e0;
+        }
+
+        body.dark-mode .close-btn:hover {
+            background: #4a5568;
+            color: #f7fafc;
+        }
+
+        .epg-list {
+            list-style: none;
+        }
+
+        .epg-item {
+            padding: 1rem;
+            border-bottom: 1px solid #f0f0f0;
+            transition: background 0.2s ease;
+        }
+
+        body.dark-mode .epg-item {
+            border-bottom-color: #4a5568;
+        }
+
+        .epg-item.current {
+            background: #e8f5e8;
+            border-left: 4px solid #4CAF50;
+            color: #2e7d32;
+        }
+
+        body.dark-mode .epg-item.current {
+            background: #1b5e20;
+            border-left-color: #66bb6a;
+            color: #c8e6c9;
+        }
+
+        .epg-item.past {
+            opacity: 0.7;
+        }
+
+        .epg-item:hover {
+            background: #f8f9fa;
+        }
+
+        body.dark-mode .epg-item:hover {
+            background: #4a5568;
+        }
+
+        .epg-item:last-child {
+            border-bottom: none;
+        }
+
+        .epg-time {
+            font-size: 0.9rem;
+            color: #666;
+            margin-bottom: 0.5rem;
+        }
+
+        body.dark-mode .epg-time {
+            color: #cbd5e0;
+        }
+
+        .epg-program-title {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.25rem;
+        }
+
+        body.dark-mode .epg-program-title {
+            color: #f7fafc;
+        }
+
+        .epg-description {
+            font-size: 0.9rem;
+            color: #666;
+            line-height: 1.4;
+        }
+
+        body.dark-mode .epg-description {
+            color: #cbd5e0;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .links {
+                justify-content: center;
+            }
+            
+            .channels {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>IPTV 节目管理服务</h1>
+            <p>电信IPTV频道管理和节目单查看</p>
+        </div>
+        
+        <div class="controls">
+            <div class="links">
+                <button class="link" onclick="copyToClipboard('playlist')">📋 复制 M3U 链接</button>
+                <button class="link" onclick="copyToClipboard('xmltv')">📋 复制 EPG 链接</button>
+            </div>
+            
+            <div class="filter-section">
+                <span>清晰度:</span>
+                <button class="filter-btn active" onclick="filterByQuality('all')">全部</button>
+                <button class="filter-btn" onclick="filterByQuality('超清频道')">超清</button>
+                <button class="filter-btn" onclick="filterByQuality('高清频道')">高清</button>
+                <button class="filter-btn" onclick="filterByQuality('普通频道')">普通</button>
+            </div>
+            
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span id="theme-icon">🌙</span>
+                <span id="theme-text">深色模式</span>
+            </button>
+        </div>
+        
+        <div id="channels" class="channels">
+            <div class="loading">
+                <div class="spinner"></div>
+                正在加载频道列表...
+            </div>
+        </div>
+    </div>
+
+    <div id="copy-toast" class="copy-toast">
+        已复制链接！
+    </div>
+
+    <div id="epg-modal" class="epg-modal">
+        <div class="epg-content">
+            <div class="epg-header">
+                <div class="epg-title" id="epg-channel-name">节目单</div>
+                <button class="close-btn" onclick="closeEpgModal()">&times;</button>
+            </div>
+            <div class="mapping-section">
+                <div class="mapping-label">如无台标和节目单，可选择映射到其他频道：</div>
+                <select class="mapping-select" id="mapping-select" onchange="onMappingChange()">
+                    <option value="">请选择映射频道...</option>
+                </select>
+            </div>
+            <div id="epg-list-container">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    正在加载节目单...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let channels = [];
+        let isDarkMode = false;
+        let currentQualityFilter = 'all';
+        let currentChannel = null;
+        let channelMappings = new Map(); // 存储频道映射关系
+
+        // 初始化主题
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                enableDarkMode();
+            }
+        }
+
+        function toggleTheme() {
+            if (isDarkMode) {
+                disableDarkMode();
+            } else {
+                enableDarkMode();
+            }
+        }
+
+        function enableDarkMode() {
+            document.body.classList.add('dark-mode');
+            document.getElementById('theme-icon').textContent = '☀️';
+            document.getElementById('theme-text').textContent = '浅色模式';
+            localStorage.setItem('theme', 'dark');
+            isDarkMode = true;
+        }
+
+        function disableDarkMode() {
+            document.body.classList.remove('dark-mode');
+            document.getElementById('theme-icon').textContent = '🌙';
+            document.getElementById('theme-text').textContent = '深色模式';
+            localStorage.setItem('theme', 'light');
+            isDarkMode = false;
+        }
+
+        function filterByQuality(quality) {
+            currentQualityFilter = quality;
+            
+            // 更新按钮状态
+            const filterButtons = document.querySelectorAll('.filter-btn');
+            filterButtons.forEach(btn => btn.classList.remove('active'));
+            
+            // 找到对应的按钮并设置为active
+            filterButtons.forEach(btn => {
+                const btnText = btn.textContent;
+                if ((quality === 'all' && btnText === '全部') ||
+                    (quality === '超清频道' && btnText === '超清') ||
+                    (quality === '高清频道' && btnText === '高清') ||
+                    (quality === '普通频道' && btnText === '普通')) {
+                    btn.classList.add('active');
+                }
+            });
+            
+            renderChannels(getFilteredChannels());
+        }
+
+        function getFilteredChannels() {
+            if (currentQualityFilter === 'all') {
+                return channels;
+            }
+            return channels.filter(channel => channel.category === currentQualityFilter);
+        }
+
+        function loadMappingsFromStorage() {
+            try {
+                const stored = localStorage.getItem('channelMappings');
+                if (stored) {
+                    const mappings = JSON.parse(stored);
+                    channelMappings = new Map(mappings);
+                    
+                    // 同步到后端
+                    syncMappingsToBackend();
+                }
+            } catch (error) {
+                console.error('加载映射配置失败:', error);
+            }
+        }
+
+        function saveMappingsToStorage() {
+            try {
+                localStorage.setItem('channelMappings', JSON.stringify(Array.from(channelMappings.entries())));
+                
+                // 同步到后端
+                syncMappingsToBackend();
+            } catch (error) {
+                console.error('保存映射配置失败:', error);
+            }
+        }
+
+        async function syncMappingsToBackend() {
+            try {
+                const mappingsArray = Array.from(channelMappings.entries()).map(([from_id, to_id]) => ({
+                    from_id: parseInt(from_id),
+                    to_id: parseInt(to_id)
+                }));
+                
+                const response = await fetch('/api/channel-mappings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ mappings: mappingsArray })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                console.log('映射配置已同步到后端');
+            } catch (error) {
+                console.error('同步映射配置到后端失败:', error);
+            }
+        }
+
+        function onMappingChange() {
+            const mappingSelect = document.getElementById('mapping-select');
+            const selectedChannelId = mappingSelect.value;
+            
+            if (!currentChannel) return;
+            
+            if (selectedChannelId) {
+                // 设置映射
+                channelMappings.set(currentChannel.id, parseInt(selectedChannelId));
+                console.log(`设置映射: ${currentChannel.name} (${currentChannel.id}) -> ${selectedChannelId}`);
+                
+                // 重新加载EPG数据
+                loadChannelEpg(currentChannel.id);
+            } else {
+                // 删除映射
+                channelMappings.delete(currentChannel.id);
+                console.log(`删除映射: ${currentChannel.name} (${currentChannel.id})`);
+                
+                // 重新加载EPG数据
+                loadChannelEpg(currentChannel.id);
+            }
+            
+            // 保存映射到localStorage
+            saveMappingsToStorage();
+            
+            // 重新渲染频道列表以更新台标显示
+            renderChannels(getFilteredChannels());
+        }
+
+        async function loadChannelEpg(channelId) {
+            const listContainer = document.getElementById('epg-list-container');
+            
+            // 检查是否有映射
+            const mappedChannelId = channelMappings.get(channelId) || channelId;
+            
+            listContainer.innerHTML = `
+                <div class="loading">
+                    <div class="spinner"></div>
+                    正在加载节目单...
+                </div>
+            `;
+            
+            // 增加等待时间到7秒
+            await new Promise(resolve => setTimeout(resolve, 7000));
+            
+            let retries = 3; // 增加重试次数到3次
+            while (retries > 0) {
+                try {
+                    console.log(`正在获取频道 ${mappedChannelId} 的EPG数据`);
+                    const response = await fetch(`/api/channel/${mappedChannelId}/epg`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    const epgData = await response.json();
+                    console.log(`获取到 ${epgData.length} 条EPG数据`);
+                    renderEpg(epgData);
+                    break;
+                } catch (error) {
+                    console.error('EPG获取错误:', error);
+                    retries--;
+                    if (retries > 0) {
+                        listContainer.innerHTML = `
+                            <div class="loading">
+                                <div class="spinner"></div>
+                                网络错误，正在重试... (剩余 ${retries} 次)
+                            </div>
+                        `;
+                        await new Promise(resolve => setTimeout(resolve, 7000)); // 每次重试等待7秒
+                    } else {
+                        listContainer.innerHTML = `
+                            <div class="error">
+                                加载节目单失败: ${error.message}<br>
+                                <small>请检查网络连接或稍后重试</small>
+                            </div>
+                        `;
+                    }
+                }
+            }
+        }
+
+        async function copyToClipboard(type) {
+            const baseUrl = window.location.origin;
+            const url = type === 'playlist' ? `${baseUrl}/playlist` : `${baseUrl}/xmltv`;
+            
+            try {
+                await navigator.clipboard.writeText(url);
+                showCopyToast();
+            } catch (err) {
+                // 降级方案
+                const textArea = document.createElement('textarea');
+                textArea.value = url;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                showCopyToast();
+            }
+        }
+
+        function showCopyToast() {
+            const toast = document.getElementById('copy-toast');
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        async function loadChannels() {
+            try {
+                const response = await fetch('/api/channels');
+                if (!response.ok) {
+                    throw new Error('获取频道列表失败');
+                }
+                channels = await response.json();
+                
+                console.log(`加载了 ${channels.length} 个频道`);
+                if (channels.length > 0) {
+                    console.log('第一个频道示例:', channels[0]);
+                    // 统计分类分布
+                    const categoryCount = {};
+                    channels.forEach(ch => {
+                        const cat = ch.category || '未分类';
+                        categoryCount[cat] = (categoryCount[cat] || 0) + 1;
+                    });
+                    console.log('分类统计:', categoryCount);
+                }
+                
+                // 加载映射配置
+                loadMappingsFromStorage();
+                
+                renderChannels(getFilteredChannels());
+            } catch (error) {
+                console.error('加载频道失败:', error);
+                document.getElementById('channels').innerHTML = `
+                    <div class="error">加载失败: ${error.message}</div>
+                `;
+            }
+        }
+
+        function renderChannels(channelsToRender) {
+            const container = document.getElementById('channels');
+            if (channelsToRender.length === 0) {
+                container.innerHTML = '<div class="error">没有找到频道</div>';
+                return;
+            }
+
+            container.innerHTML = channelsToRender.map(channel => {
+                // 检查是否有映射，使用映射后的ID获取台标
+                const mappedChannelId = channelMappings.get(channel.id) || channel.id;
+                const logoUrl = `/logo/${mappedChannelId}.png`;
+                const category = channel.category || '普通频道'; // fallback for undefined
+                const rtspShort = channel.rtsp.length > 40 ? channel.rtsp.substring(0, 40) + '...' : channel.rtsp;
+                
+                console.log(`频道: ${channel.name}, 分类: ${channel.category}`); // 调试用
+                
+                return `
+                    <div class="channel" onclick="showChannelDetails(${channel.id})">
+                        <div class="channel-header">
+                            <img src="${logoUrl}" alt="${channel.name}" class="channel-logo" 
+                                 data-channel-id="${channel.id}"
+                                 onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" 
+                                 onload="this.style.display='block'; this.nextElementSibling.style.display='none';">
+                            <div class="no-logo-indicator" style="display: none;" onclick="event.stopPropagation(); showChannelMapping(${channel.id})">!</div>
+                            <div>
+                                <h3>${channel.name}</h3>
+                                <p><strong>分类:</strong> ${category}</p>
+                            </div>
+                        </div>
+                        <p><strong>频道ID:</strong> ${channel.id}</p>
+                        <p style="word-break: break-all; font-size: 0.8rem; line-height: 1.3;"><strong>RTSP:</strong> ${rtspShort}</p>
+                        ${channel.igmp ? `<p style="word-break: break-all; font-size: 0.8rem; line-height: 1.3;"><strong>IGMP:</strong> ${channel.igmp}</p>` : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showChannelMapping(channelId) {
+            // 直接打开EPG弹窗进行映射
+            showChannelDetails(channelId);
+        }
+
+        async function showChannelDetails(channelId) {
+            const channel = channels.find(c => c.id === channelId);
+            if (!channel) return;
+
+            currentChannel = channel;
+            const modal = document.getElementById('epg-modal');
+            const channelName = document.getElementById('epg-channel-name');
+            const listContainer = document.getElementById('epg-list-container');
+            const mappingSelect = document.getElementById('mapping-select');
+            
+            channelName.textContent = `${channel.name} - 节目单`;
+            
+            // 填充映射选择框
+            mappingSelect.innerHTML = '<option value="">请选择映射频道...</option>';
+            channels
+                .filter(ch => ch.id !== channel.id)
+                .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+                .forEach(ch => {
+                    const option = document.createElement('option');
+                    option.value = ch.id;
+                    option.textContent = ch.name;
+                    mappingSelect.appendChild(option);
+                });
+            
+            // 设置当前映射选择
+            const currentMapping = channelMappings.get(channel.id);
+            if (currentMapping) {
+                mappingSelect.value = currentMapping;
+            }
+            
+            modal.style.display = 'block';
+            
+            // 加载EPG数据
+            await loadChannelEpg(channel.id);
+        }
+
+        function renderEpg(epgData) {
+            const container = document.getElementById('epg-list-container');
+            
+            if (!epgData || epgData.length === 0) {
+                container.innerHTML = '<div class="error">暂无节目单数据</div>';
+                return;
+            }
+            
+            // 按时间排序
+            epgData.sort((a, b) => a.start - b.start);
+            
+            const list = document.createElement('ul');
+            list.className = 'epg-list';
+            
+            const now = Date.now();
+            let currentProgramElement = null;
+            
+            epgData.forEach((program, index) => {
+                const item = document.createElement('li');
+                const startTime = new Date(program.start);
+                const endTime = new Date(program.stop);
+                
+                // 判断节目状态
+                if (program.start <= now && program.stop > now) {
+                    item.className = 'epg-item current';
+                    currentProgramElement = item;
+                } else if (program.stop <= now) {
+                    item.className = 'epg-item past';
+                } else {
+                    item.className = 'epg-item future';
+                }
+                
+                const timeStr = `${formatTime(startTime)} - ${formatTime(endTime)}`;
+                const dateStr = formatDate(startTime);
+                
+                item.innerHTML = `
+                    <div class="epg-time">${dateStr} ${timeStr}</div>
+                    <div class="epg-program-title">${program.title}</div>
+                    ${program.desc && program.desc !== program.title ? 
+                        `<div class="epg-description">${program.desc}</div>` : ''}
+                `;
+                
+                list.appendChild(item);
+            });
+            
+            container.innerHTML = '';
+            container.appendChild(list);
+            
+            // 滚动到当前节目
+            if (currentProgramElement) {
+                setTimeout(() => {
+                    currentProgramElement.scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'center' 
+                    });
+                }, 100);
+            }
+        }
+
+        function formatTime(date) {
+            return date.toLocaleTimeString('zh-CN', { 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+        }
+
+        function formatDate(date) {
+            const today = new Date();
+            const yesterday = new Date(today);
+            yesterday.setDate(yesterday.getDate() - 1);
+            const tomorrow = new Date(today);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            
+            if (date.toDateString() === today.toDateString()) {
+                return '今天';
+            } else if (date.toDateString() === yesterday.toDateString()) {
+                return '昨天';
+            } else if (date.toDateString() === tomorrow.toDateString()) {
+                return '明天';
+            } else {
+                return date.toLocaleDateString('zh-CN', { 
+                    month: 'short', 
+                    day: 'numeric' 
+                });
+            }
+        }
+
+        function closeEpgModal() {
+            document.getElementById('epg-modal').style.display = 'none';
+        }
+
+        // 点击模态框背景关闭
+        document.getElementById('epg-modal').onclick = function(e) {
+            if (e.target === this) {
+                closeEpgModal();
+            }
+        };
+
+        // ESC键关闭模态框
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeEpgModal();
+            }
+        });
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initTheme();
+            loadChannels();
+        });
+    </script>
+</body>
+</html>

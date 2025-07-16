@@ -10,7 +10,7 @@ use log::{debug, info};
 use rand::Rng;
 use regex_lite::Regex;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -29,6 +29,16 @@ fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
 
 fn get_mapped_channel_name(channel_name: &str, mapping: &HashMap<String, String>) -> String {
     mapping.get(channel_name).cloned().unwrap_or_else(|| channel_name.to_string())
+}
+
+fn categorize_channel(channel_name: &str) -> String {
+    if channel_name.contains("超高清") || channel_name.contains("4K") {
+        "超清频道".to_string()
+    } else if channel_name.contains("高清") || channel_name.contains("超清") || channel_name.contains("卫视") {
+        "高清频道".to_string()
+    } else {
+        "普通频道".to_string()
+    }
 }
 
 fn get_client_with_if(#[allow(unused_variables)] if_name: Option<&str>) -> Result<Client> {
@@ -79,6 +89,7 @@ async fn get_base_url(client: &Client, args: &Args) -> Result<String> {
     Ok(base_url)
 }
 
+#[derive(Serialize)]
 pub(crate) struct Program {
     pub(crate) start: i64,
     pub(crate) stop: i64,
@@ -86,12 +97,14 @@ pub(crate) struct Program {
     pub(crate) desc: String,
 }
 
+#[derive(Serialize)]
 pub(crate) struct Channel {
     pub(crate) id: u64,
     pub(crate) name: String,
     pub(crate) rtsp: String,
     pub(crate) igmp: Option<String>,
     pub(crate) epg: Vec<Program>,
+    pub(crate) category: String,
 }
 
 #[derive(Deserialize)]
@@ -244,6 +257,7 @@ pub(crate) async fn get_channels(
         .map(|(i, n, (rtsp, igmp))| Channel {
             id: i,
             name: n.to_owned(),
+            category: categorize_channel(&n),
             rtsp,
             igmp,
             epg: vec![],

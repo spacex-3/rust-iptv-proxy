@@ -1,8 +1,9 @@
 use actix_web::{
-    get,
-    web::{Data, Path, Query},
+    get, post,
+    web::{Data, Path, Query, Json},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
+use actix_files as fs;
 use anyhow::{anyhow, Result};
 use argh::FromArgs;
 use chrono::{FixedOffset, TimeZone, Utc};
@@ -14,7 +15,7 @@ use std::{
     net::SocketAddrV4,
     process::exit,
     str::FromStr,
-    sync::Mutex,
+    sync::{Mutex, LazyLock},
 };
 use xml::{
     reader::XmlEvent as XmlReadEvent,
@@ -32,6 +33,7 @@ mod proxy;
 
 static OLD_PLAYLIST: Mutex<Option<String>> = Mutex::new(None);
 static OLD_XMLTV: Mutex<Option<String>> = Mutex::new(None);
+static CHANNEL_MAPPINGS: LazyLock<Mutex<HashMap<u64, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
     let mut mapping = HashMap::new();
@@ -166,25 +168,56 @@ fn to_xmltv<R: Read>(channels: Vec<Channel>, extra: Option<EventReader<R>>, mapp
         
         // 如果当前频道没有EPG数据，尝试使用映射频道的EPG数据
         if channel.epg.is_empty() {
-            if let Some(mapped_name) = mapping.get(&channel.name) {
-                // 查找映射的频道
-                if let Some(mapped_channel) = channels.iter().find(|ch| ch.name == *mapped_name) {
-                    for epg in mapped_channel.epg.iter() {
-                        writer.write(
-                            XmlWriteEvent::start_element("programme")
-                                .attr("start", &format!("{} +0800", to_xmltv_time(epg.start)?))
-                                .attr("stop", &format!("{} +0800", to_xmltv_time(epg.stop)?))
-                                .attr("channel", &format!("{}", channel.id)), // 使用当前频道的ID
-                        )?;
-                        writer.write(XmlWriteEvent::start_element("title").attr("lang", "chi"))?;
-                        writer.write(XmlWriteEvent::characters(&epg.title))?;
-                        writer.write(XmlWriteEvent::end_element())?;
-                        if !epg.desc.is_empty() {
-                            writer.write(XmlWriteEvent::start_element("desc"))?;
-                            writer.write(XmlWriteEvent::characters(&epg.desc))?;
+            let mut found_mapped_epg = false;
+            
+            // 首先尝试前端ID映射
+            if let Ok(mappings) = CHANNEL_MAPPINGS.try_lock() {
+                if let Some(&mapped_id) = mappings.get(&channel.id) {
+                    if let Some(mapped_channel) = channels.iter().find(|ch| ch.id == mapped_id) {
+                        for epg in mapped_channel.epg.iter() {
+                            writer.write(
+                                XmlWriteEvent::start_element("programme")
+                                    .attr("start", &format!("{} +0800", to_xmltv_time(epg.start)?))
+                                    .attr("stop", &format!("{} +0800", to_xmltv_time(epg.stop)?))
+                                    .attr("channel", &format!("{}", channel.id)), // 使用当前频道的ID
+                            )?;
+                            writer.write(XmlWriteEvent::start_element("title").attr("lang", "chi"))?;
+                            writer.write(XmlWriteEvent::characters(&epg.title))?;
+                            writer.write(XmlWriteEvent::end_element())?;
+                            if !epg.desc.is_empty() {
+                                writer.write(XmlWriteEvent::start_element("desc"))?;
+                                writer.write(XmlWriteEvent::characters(&epg.desc))?;
+                                writer.write(XmlWriteEvent::end_element())?;
+                            }
                             writer.write(XmlWriteEvent::end_element())?;
                         }
-                        writer.write(XmlWriteEvent::end_element())?;
+                        found_mapped_epg = true;
+                    }
+                }
+            }
+            
+            // 如果前端映射没找到，尝试传统的名称映射
+            if !found_mapped_epg {
+                if let Some(mapped_name) = mapping.get(&channel.name) {
+                    // 查找映射的频道
+                    if let Some(mapped_channel) = channels.iter().find(|ch| ch.name == *mapped_name) {
+                        for epg in mapped_channel.epg.iter() {
+                            writer.write(
+                                XmlWriteEvent::start_element("programme")
+                                    .attr("start", &format!("{} +0800", to_xmltv_time(epg.start)?))
+                                    .attr("stop", &format!("{} +0800", to_xmltv_time(epg.stop)?))
+                                    .attr("channel", &format!("{}", channel.id)), // 使用当前频道的ID
+                            )?;
+                            writer.write(XmlWriteEvent::start_element("title").attr("lang", "chi"))?;
+                            writer.write(XmlWriteEvent::characters(&epg.title))?;
+                            writer.write(XmlWriteEvent::end_element())?;
+                            if !epg.desc.is_empty() {
+                                writer.write(XmlWriteEvent::start_element("desc"))?;
+                                writer.write(XmlWriteEvent::characters(&epg.desc))?;
+                                writer.write(XmlWriteEvent::end_element())?;
+                            }
+                            writer.write(XmlWriteEvent::end_element())?;
+                        }
                     }
                 }
             }
@@ -201,6 +234,89 @@ async fn parse_extra_xml(url: &str) -> Result<EventReader<Cursor<String>>> {
     let xml = response.text().await?;
     let reader = Cursor::new(xml);
     Ok(EventReader::new(reader))
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct ChannelMapping {
+    from_id: u64,
+    to_id: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct MappingRequest {
+    mappings: Vec<ChannelMapping>,
+}
+
+#[post("/api/channel-mappings")]
+async fn api_set_channel_mappings(req: Json<MappingRequest>) -> impl Responder {
+    debug!("Setting channel mappings");
+    
+    if let Ok(mut mappings) = CHANNEL_MAPPINGS.try_lock() {
+        mappings.clear();
+        for mapping in &req.mappings {
+            mappings.insert(mapping.from_id, mapping.to_id);
+        }
+        HttpResponse::Ok().json("Mappings updated successfully")
+    } else {
+        HttpResponse::InternalServerError().json("Failed to update mappings")
+    }
+}
+
+#[get("/api/channel-mappings")]
+async fn api_get_channel_mappings() -> impl Responder {
+    debug!("Getting channel mappings");
+    
+    if let Ok(mappings) = CHANNEL_MAPPINGS.try_lock() {
+        let response: Vec<ChannelMapping> = mappings.iter()
+            .map(|(&from_id, &to_id)| ChannelMapping { from_id, to_id })
+            .collect();
+        HttpResponse::Ok().json(response)
+    } else {
+        HttpResponse::InternalServerError().json("Failed to get mappings")
+    }
+}
+
+#[get("/api/channel/{id}/epg")]
+async fn api_channel_epg(args: Data<Args>, req: HttpRequest, path: Path<u64>) -> impl Responder {
+    debug!("Get channel EPG");
+    let channel_id = path.into_inner();
+    let scheme = req.connection_info().scheme().to_owned();
+    let host = req.connection_info().host().to_owned();
+    
+    // 检查是否有映射
+    let effective_channel_id = if let Ok(mappings) = CHANNEL_MAPPINGS.try_lock() {
+        mappings.get(&channel_id).copied().unwrap_or(channel_id)
+    } else {
+        channel_id
+    };
+    
+    match get_channels(&args, true, &scheme, &host).await {
+        Ok(channels) => {
+            if let Some(channel) = channels.iter().find(|c| c.id == effective_channel_id) {
+                HttpResponse::Ok().json(&channel.epg)
+            } else {
+                HttpResponse::NotFound().json(format!("Channel {} not found", effective_channel_id))
+            }
+        },
+        Err(e) => HttpResponse::InternalServerError().json(format!("Error getting channel EPG: {}", e)),
+    }
+}
+
+#[get("/api/channels")]
+async fn api_channels(args: Data<Args>, req: HttpRequest) -> impl Responder {
+    debug!("Get channels");
+    let scheme = req.connection_info().scheme().to_owned();
+    let host = req.connection_info().host().to_owned();
+    
+    match get_channels(&args, true, &scheme, &host).await {
+        Ok(channels) => HttpResponse::Ok().json(channels),
+        Err(e) => HttpResponse::InternalServerError().json(format!("Error getting channels: {}", e)),
+    }
+}
+
+#[get("/")]
+async fn index() -> impl Responder {
+    fs::NamedFile::open_async("./static/index.html").await
 }
 
 #[get("/xmltv")]
@@ -288,7 +404,14 @@ async fn playlist(args: Data<Args>, req: HttpRequest) -> impl Responder {
                             c.igmp.as_ref().map(|_| &c.rtsp).unwrap_or(&"".to_string()));
                         
                         // 查找映射的频道ID用于 logo 和 EPG
-                        let mapped_id = find_mapped_channel_id(&c.name, &ch, &mapping);
+                        let mapped_id = if let Ok(mappings) = CHANNEL_MAPPINGS.try_lock() {
+                            mappings.get(&c.id).copied().unwrap_or_else(|| {
+                                // 如果没有前端映射，尝试使用传统的名称映射
+                                find_mapped_channel_id(&c.name, &ch, &mapping)
+                            })
+                        } else {
+                            find_mapped_channel_id(&c.name, &ch, &mapping)
+                        };
                         let logo_id = if mapped_id != 0 { mapped_id } else { c.id };
                         
                         format!(
@@ -376,11 +499,17 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         let args = Data::new(args.clone());
         App::new()
+            .service(index)
+            .service(api_channels)
+            .service(api_channel_epg)
+            .service(api_set_channel_mappings)
+            .service(api_get_channel_mappings)
             .service(xmltv)
             .service(playlist)
             .service(logo)
             .service(rtsp)
             .service(udp)
+            .service(fs::Files::new("/static", "./static").show_files_listing())
             .app_data(args)
     })
     .bind(bind_addr)?
