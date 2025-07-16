@@ -15,6 +15,8 @@ RUN rm src/main.rs
 # 复制源代码
 COPY src ./src
 
+RUN cargo --version
+
 # 构建应用程序
 RUN cargo build --release
 
