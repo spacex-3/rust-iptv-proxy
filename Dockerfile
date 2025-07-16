@@ -1,10 +1,7 @@
-# 若你不是用官方 rust 镜像，请加这几行
+FROM rust:latest AS builder
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup update stable
-
-# 使用官方 Rust 镜像作为构建环境
-FROM rust:latest AS builder
 
 # 设置工作目录
 WORKDIR /app
