@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   iptv-proxy:
-    build: .
+    image: lisankai93/rust-iptv-proxy:latest
     ports:
       - "7878:7878"
     command: [
