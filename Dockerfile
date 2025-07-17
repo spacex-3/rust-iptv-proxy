@@ -17,7 +17,6 @@ RUN rm src/main.rs
 # 复制源代码
 COPY src ./src
 
-
 # 构建应用程序
 RUN cargo build --release
 
@@ -32,6 +31,9 @@ RUN apt-get update && apt-get install -y \
 
 # 复制编译好的二进制文件
 COPY --from=builder /app/target/release/iptv /usr/local/bin/iptv
+
+# 复制静态文件到容器
+COPY static /static
 
 # 暴露默认端口
 EXPOSE 7878
