@@ -528,6 +528,7 @@
                 <button class="link" onclick="copyToClipboard('playlist')">📋 复制 M3U 链接</button>
                 <button class="link" onclick="copyToClipboard('xmltv')">📋 复制 EPG 链接</button>
                 <button class="link" onclick="regenerateXmltv()" id="regenerate-btn">🔄 重新生成 EPG</button>
+                <button class="link" onclick="checkCacheStatus()" id="cache-status-btn">🔍 检查缓存状态</button>
             </div>
             
             <div class="filter-section">
@@ -792,6 +793,49 @@
                     const error = await response.text();
                     showToast(`生成失败: ${error}`);
                 }
+            } catch (error) {
+                showToast(`网络错误: ${error.message}`);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        async function checkCacheStatus() {
+            const btn = document.getElementById('cache-status-btn');
+            const originalText = btn.textContent;
+            btn.textContent = '🔍 检查中...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/cache-status');
+                const status = await response.text();
+                
+                // 去掉引号
+                const cleanStatus = status.replace(/"/g, '');
+                
+                let message = '';
+                switch(cleanStatus) {
+                    case 'cached_in_memory_and_file':
+                        message = '✅ 缓存状态：内存和文件都有缓存';
+                        break;
+                    case 'cached_in_memory_only':
+                        message = '⚠️ 缓存状态：仅内存有缓存';
+                        break;
+                    case 'cached_in_file_only':
+                        message = '⚠️ 缓存状态：仅文件有缓存';
+                        break;
+                    case 'not_cached':
+                        message = '❌ 缓存状态：无缓存';
+                        break;
+                    case 'cache_lock_error':
+                        message = '❌ 缓存状态：缓存锁定错误';
+                        break;
+                    default:
+                        message = `❓ 缓存状态：${cleanStatus}`;
+                }
+                
+                showToast(message);
             } catch (error) {
                 showToast(`网络错误: ${error.message}`);
             } finally {
