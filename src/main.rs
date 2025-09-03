@@ -379,11 +379,11 @@ async fn fetch_all_channels_epg_simple(args: &Args) -> Result<Vec<Channel>> {
     let scheme = "http";
     let host = &args.bind;
     
-    // 先获取频道列表（这会进行认证）
-    let channels = get_channels(args, false, scheme, host).await?;
+    // 先获取频道列表（这会进行认证并获取EPG数据）
+    let channels = get_channels(args, true, scheme, host).await?;
     
     let channel_count = channels.len();
-    log::info!("Got {} channels, fetching EPG with concurrency 10", channel_count);
+    log::info!("Got {} channels with EPG data", channel_count);
     
     // 更新总频道数
     if let Ok(mut progress) = EPG_FETCH_PROGRESS.try_lock() {
@@ -393,103 +393,23 @@ async fn fetch_all_channels_epg_simple(args: &Args) -> Result<Vec<Channel>> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let mut with_epg_count = 0;
     
-    // 创建已认证的client，与get_channels使用相同的方式
-    let client = get_client_with_if(args.interface.as_deref())?;
-    let base_url = get_base_url(&client, args).await?;
-    
-    // 限制并发数为10
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
-    let mut handles = Vec::new();
-    let processed_channels = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    
-    // 为每个频道创建任务
-    for channel in channels {
-        let params = [
-            ("channelId", format!("{}", channel.id)),
-            ("begin", format!("{}", now - 86400000 * 2)), // 2天前
-            ("end", format!("{}", now + 86400000 * 5)),   // 5天后
-        ];
-        
-        // 复用同一个client和base_url，与get_channels保持一致
-        let client = client.clone();
-        let url = reqwest::Url::parse_with_params(
-            format!("{}/EPG/jsp/iptvsnmv3/en/play/ajax/_ajax_getPlaybillList.jsp", base_url).as_str(),
-            params,
-        )?;
-        let permit = semaphore.clone().acquire_owned().await?;
-        let processed = processed_channels.clone();
-        let channel_name = channel.name.clone();
-        
-        let handle = tokio::spawn(async move {
-            let _permit = permit; // 持有permit直到任务完成
-            
-            let current = processed.load(std::sync::atomic::Ordering::Relaxed) + 1;
-            
-            // 更新进度
-            if let Ok(mut progress) = EPG_FETCH_PROGRESS.try_lock() {
-                progress.current = current;
-                progress.current_channel = channel_name.clone();
-            }
-            
-            log::info!("📺 正在获取 [{}] 的EPG数据 ({}/{})", 
-                channel_name, 
-                current, 
-                channel_count
-            );
-            
-            let response = client.get(url).send().await;
-            processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            
-            (response, channel)
-        });
-        handles.push(handle);
-    }
-    
-    let mut channels_with_epg = Vec::new();
-    
-    // 处理所有任务
-    for handle in handles {
-        match handle.await {
-            Ok((Ok(res), mut channel)) => {
-                // 先获取响应文本，以便在解析失败时记录
-                let response_text = res.text().await.unwrap_or_else(|_| "Failed to get response text".to_string());
-                
-                match serde_json::from_str::<PlaybillList>(&response_text) {
-                    Ok(play_bill_list) => {
-                        for bill in play_bill_list.list.into_iter() {
-                            channel.epg.push(Program {
-                                start: bill.start_time,
-                                stop: bill.end_time,
-                                title: bill.name.clone(),
-                                desc: bill.name,
-                            })
-                        }
-                        if !channel.epg.is_empty() {
-                            with_epg_count += 1;
-                            log::debug!("✓ 获取到 '{}' 的 {} 个节目", channel.name, channel.epg.len());
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("✗ 解析 '{}' 的EPG数据失败: {}", channel.name, e);
-                        // 记录响应内容的前100个字符，方便调试
-                        log::debug!("响应内容: {}", &response_text[..response_text.len().min(100)]);
-                    }
-                }
-                channels_with_epg.push(channel);
-            }
-            Ok((Err(e), channel)) => {
-                log::warn!("✗ 获取 '{}' 的EPG失败: {}", channel.name, e);
-                channels_with_epg.push(channel);
-            }
-            Err(_) => {
-                // 处理 JoinError，通常意味着任务被取消
-                log::warn!("✗ EPG获取任务被取消");
-            }
+    // 统计有EPG数据的频道
+    for channel in channels.iter() {
+        if !channel.epg.is_empty() {
+            with_epg_count += 1;
         }
     }
     
-    log::info!("EPG获取完成: {}/{} 个频道有节目单", with_epg_count, channel_count);
-    Ok(channels_with_epg)
+    log::info!("EPG fetch completed: {}/{} channels have EPG data", with_epg_count, channel_count);
+    
+    // 重置进度状态
+    if let Ok(mut progress) = EPG_FETCH_PROGRESS.try_lock() {
+        progress.is_fetching = false;
+        progress.current = channel_count;
+        progress.current_channel = String::new();
+    }
+    
+    Ok(channels)
 }
 
 // 获取所有频道的EPG数据
