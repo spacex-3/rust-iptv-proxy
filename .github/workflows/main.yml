@@ -63,6 +63,12 @@ jobs:
           export CXX_$TARGET_VAR=$TARGET_CXX
           export AR_$TARGET_VAR=$TARGET_AR
           
+          # 设置 CARGO_TARGET_..._LINKER 环境变量
+          export CARGO_TARGET_${TARGET_VAR}_LINKER=$TARGET_CC
+          
+          # 添加 RUSTFLAGS 以避免使用内置的 CRT 对象
+          export RUSTFLAGS="-C target-feature=-crt-static"
+          
           # 构建项目
           cargo +stable build --release --target ${{ matrix.target }}
           
