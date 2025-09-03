@@ -19,54 +19,56 @@ jobs:
             sdk: https://downloads.openwrt.org/releases/23.05.3/targets/x86/64/openwrt-toolchain-23.05.3-x86-64_gcc-12.3.0_musl.Linux-x86_64.tar.xz
           - target: aarch64-unknown-linux-musl
             sdk: https://downloads.openwrt.org/releases/23.05.3/targets/armsr/armv8/openwrt-toolchain-23.05.3-armsr-armv8_gcc-12.3.0_musl.Linux-x86_64.tar.xz
-          - target: mipsel-unknown-linux-musl
-            sdk: https://downloads.openwrt.org/releases/23.05.3/targets/ramips/mt7621/openwrt-toolchain-23.05.3-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Build
+      - name: Install dependencies
         run: |
-          rustup toolchain add stable
-          rustup +stable target add ${{ matrix.target }}
+          sudo apt-get update
+          sudo apt-get install -y upx-ucl wget tar
+      - name: Setup and verify toolchain
+        run: |
           mkdir -p ~/openwrt
           wget "${{ matrix.sdk }}" -qO- | tar --strip-components 1 -C ~/openwrt -xvJ
           toolchain="$(ls -d ~/openwrt/toolchain-*)"
           export PATH="${toolchain}/bin:$PATH"
-          export CC_x86_64_unknown_linux_musl=x86_64-openwrt-linux-gcc
-          export CXX_x86_64_unknown_linux_musl=x86_64-openwrt-linux-g++
-          export AR_x86_64_unknown_linux_musl=x86_64-openwrt-linux-ar
-          export CC_aarch64_unknown_linux_musl=aarch64-openwrt-linux-gcc
-          export CXX_aarch64_unknown_linux_musl=aarch64-openwrt-linux-g++
-          export AR_aarch64_unknown_linux_musl=aarch64-openwrt-linux-ar
-          export CC_mipsel_unknown_linux_musl=mipsel-openwrt-linux-gcc
-          export CXX_mipsel_unknown_linux_musl=mipsel-openwrt-linux-g++
-          export AR_mipsel_unknown_linux_musl=mipsel-openwrt-linux-ar
+          
+          # 验证工具链
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            x86_64-openwrt-linux-gcc --version
+          elif [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            aarch64-openwrt-linux-gcc --version
+          fi
+      - name: Build
+        run: |
+          rustup toolchain add stable
+          rustup +stable target add ${{ matrix.target }}
+          toolchain="$(ls -d ~/openwrt/toolchain-*)"
+          export PATH="${toolchain}/bin:$PATH"
+          
+          # 设置目标特定的环境变量
+          if [ "${{ matrix.target }}" = "x86_64-unknown-linux-musl" ]; then
+            export TARGET_CC=x86_64-openwrt-linux-gcc
+            export TARGET_CXX=x86_64-openwrt-linux-g++
+            export TARGET_AR=x86_64-openwrt-linux-ar
+          elif [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
+            export TARGET_CC=aarch64-openwrt-linux-gcc
+            export TARGET_CXX=aarch64-openwrt-linux-g++
+            export TARGET_AR=aarch64-openwrt-linux-ar
+          fi
+          
+          # 使用 cross 的方式设置环境变量
+          export CC_${{ matrix.target }}=$TARGET_CC
+          export CXX_${{ matrix.target }}=$TARGET_CXX
+          export AR_${{ matrix.target }}=$TARGET_AR
+          
+          # 构建项目
           cargo +stable build --release --target ${{ matrix.target }}
-          upx -9 target/${{ matrix.target }}/release/iptv
+          
+          # 压缩二进制文件
+          upx --best --no-lzma target/${{ matrix.target }}/release/iptv || true
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/release/iptv
-  build-windows:
-    name: Build x86_64-pc-windows-gnu
-    runs-on: windows-latest
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    - name: Setup MSYS2
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: UCRT64
-        pacboy: upx:p
-    - name: Build
-      run: |
-        rustup set default-host x86_64-pc-windows-gnu
-        rustup toolchain add stable-gnu
-        cargo +stable build --release --target x86_64-pc-windows-gnu
-        upx -9 ./target/x86_64-pc-windows-gnu/release/iptv.exe
-    - name: Upload
-      uses: actions/upload-artifact@v4
-      with:
-        name: x86_64-pc-windows-gnu
-        path: target/x86_64-pc-windows-gnu/release/iptv.exe
