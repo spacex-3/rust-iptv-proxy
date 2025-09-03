@@ -90,7 +90,7 @@ async fn get_base_url(client: &Client, args: &Args) -> Result<String> {
     Ok(base_url)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub(crate) struct Program {
     pub(crate) start: i64,
     pub(crate) stop: i64,
@@ -98,7 +98,7 @@ pub(crate) struct Program {
     pub(crate) desc: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub(crate) struct Channel {
     pub(crate) id: u64,
     pub(crate) name: String,

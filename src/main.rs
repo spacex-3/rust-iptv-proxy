@@ -551,7 +551,7 @@ async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> impl Responder {
         
     let xml = get_channels(&args, true, &scheme, &host)
         .await
-        .and_then(|ch| to_xmltv_with_mappings(ch, extra_xml, &mapping));
+        .and_then(|ch| to_xmltv_with_mappings(ch, extra_xml, &mapping).await);
     match xml {
         Err(e) => {
             if let Some(old_xmltv) = OLD_XMLTV.try_lock().ok().and_then(|f| f.to_owned()) {
