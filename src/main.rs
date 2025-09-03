@@ -306,7 +306,8 @@ async fn generate_mapped_xmltv_periodically(args: Data<Args>) {
             
         match get_channels(&args, true, scheme, host).await {
             Ok(channels) => {
-                match to_xmltv(channels, extra_xml, &mapping) {
+                // 使用内存中的CHANNEL_MAPPINGS来生成XMLTV
+                match to_xmltv_with_mappings(channels, extra_xml, &mapping).await {
                     Ok(xmltv) => {
                         if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
                             *cache = Some(xmltv.clone());
@@ -329,6 +330,51 @@ async fn generate_mapped_xmltv_periodically(args: Data<Args>) {
             }
         }
     }
+}
+
+// 使用前端映射生成XMLTV
+async fn to_xmltv_with_mappings<R: Read>(
+    channels: Vec<Channel>,
+    extra: Option<EventReader<R>>,
+    mapping: &HashMap<String, String>,
+) -> Result<String> {
+    // 获取当前的频道映射
+    let mappings = if let Ok(m) = CHANNEL_MAPPINGS.try_lock() {
+        m.clone()
+    } else {
+        HashMap::new()
+    };
+    
+    // 创建映射查找表：频道名 -> ID
+    let name_to_id: HashMap<String, u64> = channels
+        .iter()
+        .map(|ch| (ch.name.clone(), ch.id))
+        .collect();
+    
+    // 应用前端映射到channels
+    let mut mapped_channels = channels.clone();
+    for channel in &mut mapped_channels {
+        // 如果这个频道被其他频道映射，使用映射频道的EPG
+        let mapped_epg = mappings.iter()
+            .filter(|(&from_id, &to_id)| to_id == channel.id)
+            .filter_map(|(&from_id, &to_id)| {
+                channels.iter().find(|ch| ch.id == from_id)
+            })
+            .find_map(|source_ch| {
+                if !source_ch.epg.is_empty() {
+                    Some(source_ch.epg.clone())
+                } else {
+                    None
+                }
+            });
+        
+        if let Some(epg) = mapped_epg {
+            channel.epg = epg;
+        }
+    }
+    
+    // 使用原始的to_xmltv函数生成XML
+    to_xmltv(mapped_channels, extra, mapping)
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -365,6 +411,51 @@ async fn api_set_channel_mappings(req: Json<MappingRequest>) -> impl Responder {
         HttpResponse::Ok().json("Mappings updated successfully")
     } else {
         HttpResponse::InternalServerError().json("Failed to update mappings")
+    }
+}
+
+#[post("/api/regenerate-xmltv")]
+async fn api_regenerate_xmltv(args: Data<Args>) -> impl Responder {
+    debug!("Manual XMLTV regeneration triggered");
+    
+    let scheme = "http";
+    let host = &args.bind;
+    let extra_xml = match &args.extra_xmltv {
+        Some(u) => parse_extra_xml(u).await.ok(),
+        None => None,
+    };
+    
+    let mapping = args.channel_mapping.as_ref()
+        .map(|s| parse_channel_mapping(s))
+        .unwrap_or_default();
+    
+    match get_channels(&args, true, scheme, host).await {
+        Ok(channels) => {
+            match to_xmltv_with_mappings(channels, extra_xml, &mapping).await {
+                Ok(xmltv) => {
+                    // 更新缓存
+                    if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+                        *cache = Some(xmltv.clone());
+                    }
+                    
+                    // 保存到文件
+                    if let Err(e) = save_xmltv_cache(&xmltv) {
+                        log::error!("Failed to save XMLTV cache: {}", e);
+                        return HttpResponse::InternalServerError().json("Failed to save cache");
+                    }
+                    
+                    HttpResponse::Ok().json("XMLTV regenerated successfully")
+                }
+                Err(e) => {
+                    log::error!("Failed to generate XMLTV: {}", e);
+                    HttpResponse::InternalServerError().json(format!("Failed to generate XMLTV: {}", e))
+                }
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to get channels: {}", e);
+            HttpResponse::InternalServerError().json(format!("Failed to get channels: {}", e))
+        }
     }
 }
 
@@ -460,7 +551,7 @@ async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> impl Responder {
         
     let xml = get_channels(&args, true, &scheme, &host)
         .await
-        .and_then(|ch| to_xmltv(ch, extra_xml, &mapping));
+        .and_then(|ch| to_xmltv_with_mappings(ch, extra_xml, &mapping));
     match xml {
         Err(e) => {
             if let Some(old_xmltv) = OLD_XMLTV.try_lock().ok().and_then(|f| f.to_owned()) {
@@ -667,6 +758,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_channel_epg)
             .service(api_set_channel_mappings)
             .service(api_get_channel_mappings)
+            .service(api_regenerate_xmltv)
             .service(xmltv_route)
             .service(playlist)
             .service(logo)

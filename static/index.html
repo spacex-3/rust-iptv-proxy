@@ -527,6 +527,7 @@
             <div class="links">
                 <button class="link" onclick="copyToClipboard('playlist')">📋 复制 M3U 链接</button>
                 <button class="link" onclick="copyToClipboard('xmltv')">📋 复制 EPG 链接</button>
+                <button class="link" onclick="regenerateXmltv()" id="regenerate-btn">🔄 重新生成 EPG</button>
             </div>
             
             <div class="filter-section">
@@ -772,6 +773,49 @@
                     }
                 }
             }
+        }
+
+        async function regenerateXmltv() {
+            const btn = document.getElementById('regenerate-btn');
+            const originalText = btn.textContent;
+            btn.textContent = '🔄 生成中...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/regenerate-xmltv', {
+                    method: 'POST',
+                });
+                
+                if (response.ok) {
+                    showToast('EPG 重新生成成功！');
+                } else {
+                    const error = await response.text();
+                    showToast(`生成失败: ${error}`);
+                }
+            } catch (error) {
+                showToast(`网络错误: ${error.message}`);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        function showToast(message) {
+            const toast = document.createElement('div');
+            toast.className = 'copy-toast';
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.classList.add('show');
+            }, 100);
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => {
+                    document.body.removeChild(toast);
+                }, 300);
+            }, 3000);
         }
 
         async function copyToClipboard(type) {
