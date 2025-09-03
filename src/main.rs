@@ -377,7 +377,6 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
     
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     
-    let mut tasks = JoinSet::new();
     let mut channels_with_epg = Vec::new();
     
     log::info!("Fetching EPG for {} channels", channels.len());
@@ -385,6 +384,10 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
     // 创建一个client复用
     let client = get_client_with_if(args.interface.as_deref())?;
     let base_url = get_base_url(&client, &args).await?;
+    
+    // 限制并发数为5，避免被服务器拒绝
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
+    let mut handles = Vec::new();
     
     for channel in channels {
         let params = [
@@ -396,35 +399,45 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
             format!("{}/EPG/jsp/iptvsnmv3/en/play/ajax/_ajax_getPlaybillList.jsp", base_url).as_str(),
             params,
         )?;
-        let client = client.clone(); // 克隆client供每个task使用
-        tasks.spawn(async move { (client.get(url).send().await, channel) });
+        let client = client.clone();
+        let permit = semaphore.clone().acquire_owned().await?;
+        
+        let handle = tokio::spawn(async move {
+            let _permit = permit; // 持有permit直到任务完成
+            let response = client.get(url).send().await;
+            (response, channel)
+        });
+        handles.push(handle);
     }
     
-    while let Some(Ok((Ok(res), mut channel))) = tasks.join_next().await {
-        log::debug!("Processing response for channel: {}", channel.name);
-        
-        let response_text = res.text().await.unwrap_or_else(|_| "Failed to get response text".to_string());
-        
-        match serde_json::from_str::<PlaybillList>(&response_text) {
-            Ok(play_bill_list) => {
-                log::debug!("Got {} programs for channel '{}'", play_bill_list.list.len(), channel.name);
-                for bill in play_bill_list.list.into_iter() {
-                    channel.epg.push(Program {
-                        start: bill.start_time,
-                        stop: bill.end_time,
-                        title: bill.name.clone(),
-                        desc: bill.name,
-                    })
+    for handle in handles {
+        if let Ok((Ok(res), mut channel)) = handle.await {
+            log::debug!("Processing response for channel: {}", channel.name);
+            
+            let response_text = res.text().await.unwrap_or_else(|_| "Failed to get response text".to_string());
+            
+            match serde_json::from_str::<PlaybillList>(&response_text) {
+                Ok(play_bill_list) => {
+                    log::debug!("Got {} programs for channel '{}'", play_bill_list.list.len(), channel.name);
+                    for bill in play_bill_list.list.into_iter() {
+                        channel.epg.push(Program {
+                            start: bill.start_time,
+                            stop: bill.end_time,
+                            title: bill.name.clone(),
+                            desc: bill.name,
+                        })
+                    }
+                    log::debug!("Fetched {} programs for channel '{}'", channel.epg.len(), channel.name);
                 }
-                log::debug!("Fetched {} programs for channel '{}'", channel.epg.len(), channel.name);
+                Err(e) => {
+                    log::warn!("Failed to parse EPG data for channel '{}': {}", channel.name, e);
+                    log::debug!("Response for channel {}: {}", channel.name, response_text);
+                }
             }
-            Err(e) => {
-                log::warn!("Failed to parse EPG data for channel '{}': {}", channel.name, e);
-                log::debug!("Response for channel {}: {}", channel.name, response_text);
-            }
+            channels_with_epg.push(channel);
         }
-        channels_with_epg.push(channel);
     }
+    
     
     let with_epg = channels_with_epg.iter().filter(|ch| !ch.epg.is_empty()).count();
     let without_epg = channels_with_epg.len() - with_epg;
@@ -752,6 +765,18 @@ async fn api_channels(args: Data<Args>, req: HttpRequest) -> impl Responder {
     }
 }
 
+#[get("/api/channels-with-epg")]
+async fn api_channels_with_epg(args: Data<Args>, req: HttpRequest) -> impl Responder {
+    debug!("Get channels with EPG");
+    let scheme = req.connection_info().scheme().to_owned();
+    let host = req.connection_info().host().to_owned();
+    
+    match get_channels_with_epg(&args, &scheme, &host).await {
+        Ok(channels) => HttpResponse::Ok().json(channels),
+        Err(e) => HttpResponse::InternalServerError().json(format!("Error getting channels with EPG: {}", e)),
+    }
+}
+
 #[get("/")]
 async fn index() -> impl Responder {
     fs::NamedFile::open_async("/static/index.html").await
@@ -1055,6 +1080,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .service(index)
             .service(api_channels)
+            .service(api_channels_with_epg)
             .service(api_channel_epg)
             .service(api_set_channel_mappings)
             .service(api_get_channel_mappings)

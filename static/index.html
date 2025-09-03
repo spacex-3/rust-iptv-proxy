@@ -130,6 +130,20 @@
             border-color: #aaa;
         }
 
+        .epg-indicator {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .epg-available {
+            color: #4CAF50;
+        }
+
+        .epg-unavailable {
+            color: #f44336;
+        }
+
         body.dark-mode .theme-toggle {
             border-color: #4a5568;
             color: #cbd5e0;
@@ -529,7 +543,7 @@
                 <button class="link" onclick="copyToClipboard('xmltv')">📋 复制 EPG 链接</button>
                 <button class="link" onclick="fetchEpg()" id="fetch-epg-btn">📥 获取所有 EPG</button>
                 <button class="link" onclick="regenerateXmltv()" id="regenerate-btn">🔄 重新生成 EPG</button>
-                <button class="link" onclick="checkCacheStatus()" id="cache-status-btn">🔍 检查缓存状态</button>
+                <span id="epg-stats" style="margin-left: 20px; color: #666; font-size: 14px;">加载中...</span>
             </div>
             
             <div class="filter-section">
@@ -792,8 +806,10 @@
                     const result = await response.text();
                     showToast(result);
                     
-                    // 获取成功后自动重新生成XMLTV
-                    setTimeout(() => {
+                    // 获取成功后重新加载频道列表以更新EPG状态
+                    setTimeout(async () => {
+                        await loadChannels();
+                        // 然后重新生成XMLTV
                         regenerateXmltv();
                     }, 1000);
                 } else {
@@ -921,13 +937,31 @@
             }, 3000);
         }
 
+        // 更新EPG统计信息
+        function updateEpgStats() {
+            const withEpg = channels.filter(ch => ch.epg && ch.epg.length > 0).length;
+            const withoutEpg = channels.length - withEpg;
+            const statsElement = document.getElementById('epg-stats');
+            if (statsElement) {
+                statsElement.innerHTML = `EPG: ${withEpg}/${channels.length} (有${withEpg}个频道, 无${withoutEpg}个)`;
+            }
+        }
+
         async function loadChannels() {
             try {
-                const response = await fetch('/api/channels');
+                // 尝试获取带EPG的频道列表
+                const response = await fetch('/api/channels-with-epg');
                 if (!response.ok) {
-                    throw new Error('获取频道列表失败');
+                    // 如果失败，回退到普通频道列表
+                    console.log('获取带EPG的频道失败，回退到普通列表');
+                    const fallbackResponse = await fetch('/api/channels');
+                    if (!fallbackResponse.ok) {
+                        throw new Error('获取频道列表失败');
+                    }
+                    channels = await fallbackResponse.json();
+                } else {
+                    channels = await response.json();
                 }
-                channels = await response.json();
                 
                 console.log(`加载了 ${channels.length} 个频道`);
                 if (channels.length > 0) {
@@ -943,6 +977,9 @@
                 
                 // 加载映射配置
                 loadMappingsFromStorage();
+                
+                // 更新EPG统计
+                updateEpgStats();
                 
                 renderChannels(getFilteredChannels());
             } catch (error) {
@@ -977,8 +1014,14 @@
                                  onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" 
                                  onload="this.style.display='block'; this.nextElementSibling.style.display='none';">
                             <div class="no-logo-indicator" style="display: none;" onclick="event.stopPropagation(); showChannelMapping(${channel.id})">!</div>
-                            <div>
-                                <h3>${channel.name}</h3>
+                            <div style="flex: 1;">
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <h3 style="margin: 0;">${channel.name}</h3>
+                                    <span class="epg-indicator ${channel.epg && channel.epg.length > 0 ? 'epg-available' : 'epg-unavailable'}" 
+                                          title="${channel.epg && channel.epg.length > 0 ? `有 ${channel.epg.length} 个节目` : '无EPG数据'}">
+                                        ${channel.epg && channel.epg.length > 0 ? '●' : '○'}
+                                    </span>
+                                </div>
                                 <p><strong>分类:</strong> ${category}</p>
                             </div>
                         </div>
