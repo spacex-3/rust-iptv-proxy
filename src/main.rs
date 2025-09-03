@@ -1,6 +1,6 @@
 use actix_web::{
     get, post,
-    web::{Data, Query, Json},
+    web::{Data, Path, Query, Json},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 use actix_files as fs;
@@ -13,7 +13,7 @@ use std::{
     fs::{File, OpenOptions},
     io::{BufWriter, Cursor, Read, Write},
     net::SocketAddrV4,
-    path::Path,
+    path::Path as StdPath,
     process::exit,
     str::FromStr,
     sync::{Mutex, LazyLock},
@@ -65,7 +65,7 @@ fn find_mapped_channel_id(channel_name: &str, channels: &[Channel], mapping: &Ha
 
 // 加载频道映射从文件
 fn load_mappings_from_file() -> Result<HashMap<u64, u64>> {
-    if Path::new(MAPPINGS_FILE).exists() {
+    if StdPath::new(MAPPINGS_FILE).exists() {
         let file = File::open(MAPPINGS_FILE)?;
         let mappings: HashMap<u64, u64> = serde_json::from_reader(file)?;
         Ok(mappings)
@@ -87,7 +87,7 @@ fn save_mappings_to_file(mappings: &HashMap<u64, u64>) -> Result<()> {
 
 // 加载缓存的XMLTV
 fn load_xmltv_cache() -> Result<Option<String>> {
-    if Path::new(XMLTV_CACHE_FILE).exists() {
+    if StdPath::new(XMLTV_CACHE_FILE).exists() {
         let mut file = File::open(XMLTV_CACHE_FILE)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
