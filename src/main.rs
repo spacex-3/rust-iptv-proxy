@@ -11,8 +11,10 @@ use log::debug;
 use reqwest::Client;
 use std::{
     collections::{BTreeMap, HashMap},
-    io::{BufWriter, Cursor, Read},
+    fs::{File, OpenOptions},
+    io::{BufWriter, Cursor, Read, Write},
     net::SocketAddrV4,
+    path::Path,
     process::exit,
     str::FromStr,
     sync::{Mutex, LazyLock},
@@ -34,6 +36,9 @@ mod proxy;
 static OLD_PLAYLIST: Mutex<Option<String>> = Mutex::new(None);
 static OLD_XMLTV: Mutex<Option<String>> = Mutex::new(None);
 static CHANNEL_MAPPINGS: LazyLock<Mutex<HashMap<u64, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static MAPPED_XMLTV_CACHE: Mutex<Option<String>> = Mutex::new(None);
+const MAPPINGS_FILE: &str = "channel_mappings.json";
+const XMLTV_CACHE_FILE: &str = "xmltv_cache.xml";
 
 fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
     let mut mapping = HashMap::new();
@@ -57,6 +62,51 @@ fn find_mapped_channel_id(channel_name: &str, channels: &[Channel], mapping: &Ha
     }
     // 如果没有映射或者映射的频道不存在，返回0作为默认值
     0
+}
+
+// 加载频道映射从文件
+fn load_mappings_from_file() -> Result<HashMap<u64, u64>> {
+    if Path::new(MAPPINGS_FILE).exists() {
+        let file = File::open(MAPPINGS_FILE)?;
+        let mappings: HashMap<u64, u64> = serde_json::from_reader(file)?;
+        Ok(mappings)
+    } else {
+        Ok(HashMap::new())
+    }
+}
+
+// 保存频道映射到文件
+fn save_mappings_to_file(mappings: &HashMap<u64, u64>) -> Result<()> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(MAPPINGS_FILE)?;
+    serde_json::to_writer_pretty(file, mappings)?;
+    Ok(())
+}
+
+// 加载缓存的XMLTV
+fn load_xmltv_cache() -> Result<Option<String>> {
+    if Path::new(XMLTV_CACHE_FILE).exists() {
+        let mut file = File::open(XMLTV_CACHE_FILE)?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        Ok(Some(contents))
+    } else {
+        Ok(None)
+    }
+}
+
+// 保存XMLTV缓存
+fn save_xmltv_cache(xmltv: &str) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(XMLTV_CACHE_FILE)?;
+    file.write_all(xmltv.as_bytes())?;
+    Ok(())
 }
 
 fn to_xmltv_time(unix_time: i64) -> Result<String> {
@@ -236,6 +286,52 @@ async fn parse_extra_xml(url: &str) -> Result<EventReader<Cursor<String>>> {
     Ok(EventReader::new(reader))
 }
 
+// 定时生成映射后的XMLTV
+async fn generate_mapped_xmltv_periodically(args: Data<Args>) {
+    let scheme = "http"; // 默认scheme
+    let host = &args.bind;
+    
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // 每小时更新一次
+        
+        log::info!("Generating mapped XMLTV cache...");
+        
+        let extra_xml = match &args.extra_xmltv {
+            Some(u) => parse_extra_xml(u).await.ok(),
+            None => None,
+        };
+        
+        let mapping = args.channel_mapping.as_ref()
+            .map(|s| parse_channel_mapping(s))
+            .unwrap_or_default();
+            
+        match get_channels(&args, true, scheme, host).await {
+            Ok(channels) => {
+                match to_xmltv(channels, extra_xml, &mapping) {
+                    Ok(xmltv) => {
+                        if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+                            *cache = Some(xmltv.clone());
+                            
+                            // 保存到文件
+                            if let Err(e) = save_xmltv_cache(&xmltv) {
+                                log::error!("Failed to save XMLTV cache: {}", e);
+                            } else {
+                                log::info!("XMLTV cache updated and saved");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to generate XMLTV: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to get channels for XMLTV generation: {}", e);
+            }
+        }
+    }
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 struct ChannelMapping {
     from_id: u64,
@@ -256,6 +352,17 @@ async fn api_set_channel_mappings(req: Json<MappingRequest>) -> impl Responder {
         for mapping in &req.mappings {
             mappings.insert(mapping.from_id, mapping.to_id);
         }
+        
+        // 保存到文件
+        if let Err(e) = save_mappings_to_file(&mappings) {
+            log::error!("Failed to save mappings to file: {}", e);
+        }
+        
+        // 清除XMLTV缓存，强制重新生成
+        if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+            *cache = None;
+        }
+        
         HttpResponse::Ok().json("Mappings updated successfully")
     } else {
         HttpResponse::InternalServerError().json("Failed to update mappings")
@@ -322,6 +429,25 @@ async fn index() -> impl Responder {
 #[get("/xmltv")]
 async fn xmltv(args: Data<Args>, req: HttpRequest) -> impl Responder {
     debug!("Get EPG");
+    
+    // 首先尝试从缓存获取
+    if let Ok(cache) = MAPPED_XMLTV_CACHE.try_lock() {
+        if let Some(ref cached_xmltv) = *cache {
+            debug!("Returning cached XMLTV");
+            return HttpResponse::Ok().content_type("text/xml").body(cached_xmltv.clone());
+        }
+    }
+    
+    // 如果没有缓存，尝试从文件加载
+    if let Ok(Some(file_xmltv)) = load_xmltv_cache() {
+        debug!("Loaded XMLTV from file cache");
+        if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+            *cache = Some(file_xmltv.clone());
+        }
+        return HttpResponse::Ok().content_type("text/xml").body(file_xmltv);
+    }
+    
+    // 如果都没有，实时生成
     let scheme = req.connection_info().scheme().to_owned();
     let host = req.connection_info().host().to_owned();
     let extra_xml = match &args.extra_xmltv {
@@ -344,7 +470,21 @@ async fn xmltv(args: Data<Args>, req: HttpRequest) -> impl Responder {
                 HttpResponse::InternalServerError().body(format!("Error getting channels: {}", e))
             }
         }
-        Ok(xml) => HttpResponse::Ok().content_type("text/xml").body(xml),
+        Ok(xml) => {
+            // 缓存生成的结果
+            if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+                *cache = Some(xml.clone());
+                
+                // 异步保存到文件
+                let xml_for_save = xml.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = save_xmltv_cache(&xml_for_save) {
+                        log::error!("Failed to save XMLTV cache: {}", e);
+                    }
+                });
+            }
+            HttpResponse::Ok().content_type("text/xml").body(xml)
+        }
     }
 }
 
@@ -494,10 +634,33 @@ async fn main() -> std::io::Result<()> {
     // 使用 argh 直接从环境解析参数
     let args: Args = argh::from_env();
 
+    // 启动时加载映射
+    if let Ok(file_mappings) = load_mappings_from_file() {
+        if let Ok(mut mappings) = CHANNEL_MAPPINGS.try_lock() {
+            *mappings = file_mappings;
+            log::info!("Loaded {} channel mappings from file", mappings.len());
+        }
+    }
+    
+    // 加载XMLTV缓存
+    if let Ok(Some(xmltv_cache)) = load_xmltv_cache() {
+        if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+            *cache = Some(xmltv_cache);
+            log::info!("Loaded XMLTV cache from file");
+        }
+    }
+
     let bind_addr = args.bind.clone();
+    let args_data = Data::new(args.clone());
+    
+    // 启动定时任务
+    let task_args = args_data.clone();
+    tokio::spawn(async move {
+        generate_mapped_xmltv_periodically(task_args).await;
+    });
     
     HttpServer::new(move || {
-        let args = Data::new(args.clone());
+        let args = args_data.clone();
         App::new()
             .service(index)
             .service(api_channels)
