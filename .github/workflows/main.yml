@@ -66,8 +66,18 @@ jobs:
           # 设置 CARGO_TARGET_..._LINKER 环境变量
           export CARGO_TARGET_${TARGET_VAR}_LINKER=$TARGET_CC
           
-          # 添加 RUSTFLAGS 以避免使用内置的 CRT 对象
-          export RUSTFLAGS="-C target-feature=-crt-static"
+          # 添加 RUSTFLAGS 以避免使用内置的 CRT 对象并使用正确的链接器
+          export RUSTFLAGS="-C target-feature=-crt-static -C linker=$TARGET_CC"
+          
+          # 调试信息
+          echo "Target: ${{ matrix.target }}"
+          echo "TARGET_VAR: $TARGET_VAR"
+          echo "CC_$TARGET_VAR: $(eval echo \$CC_$TARGET_VAR)"
+          echo "CARGO_TARGET_${TARGET_VAR}_LINKER: $(eval echo \$CARGO_TARGET_${TARGET_VAR}_LINKER)"
+          echo "RUSTFLAGS: $RUSTFLAGS"
+          
+          # 验证链接器
+          $TARGET_CC --version
           
           # 构建项目
           cargo +stable build --release --target ${{ matrix.target }}

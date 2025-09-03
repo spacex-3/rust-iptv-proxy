@@ -601,6 +601,7 @@ async fn udp(args: Data<Args>, addr: Path<String>) -> impl Responder {
     HttpResponse::Ok().streaming(proxy::udp(addr, args.interface.clone()))
 }
 
+#[allow(dead_code)]
 fn usage(cmd: &str) -> std::io::Result<()> {
     let usage = format!(
         r#"Usage: {} [OPTIONS] --user <USER> --passwd <PASSWD> --mac <MAC>

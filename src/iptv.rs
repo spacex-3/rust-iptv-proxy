@@ -27,6 +27,7 @@ fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
     mapping
 }
 
+#[allow(dead_code)]
 fn get_mapped_channel_name(channel_name: &str, mapping: &HashMap<String, String>) -> String {
     mapping.get(channel_name).cloned().unwrap_or_else(|| channel_name.to_string())
 }
