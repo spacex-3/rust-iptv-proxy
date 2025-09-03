@@ -36,8 +36,10 @@ static OLD_PLAYLIST: Mutex<Option<String>> = Mutex::new(None);
 static OLD_XMLTV: Mutex<Option<String>> = Mutex::new(None);
 static CHANNEL_MAPPINGS: LazyLock<Mutex<HashMap<u64, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 static MAPPED_XMLTV_CACHE: Mutex<Option<String>> = Mutex::new(None);
+static ALL_CHANNELS_EPG: LazyLock<Mutex<Option<Vec<Channel>>>> = LazyLock::new(|| Mutex::new(None));
 const MAPPINGS_FILE: &str = "channel_mappings.json";
 const XMLTV_CACHE_FILE: &str = "xmltv_cache.xml";
+const EPG_CACHE_FILE: &str = "epg_cache.json";
 
 fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
     let mut mapping = HashMap::new();
@@ -106,6 +108,28 @@ fn save_xmltv_cache(xmltv_content: &str) -> Result<()> {
         .open(XMLTV_CACHE_FILE)?;
     file.write_all(xmltv_content.as_bytes())?;
     Ok(())
+}
+
+// 保存EPG缓存
+fn save_epg_cache(channels: &[Channel]) -> Result<()> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(EPG_CACHE_FILE)?;
+    serde_json::to_writer(file, channels)?;
+    Ok(())
+}
+
+// 加载EPG缓存
+fn load_epg_cache() -> Result<Option<Vec<Channel>>> {
+    if StdPath::new(EPG_CACHE_FILE).exists() {
+        let file = File::open(EPG_CACHE_FILE)?;
+        let channels: Vec<Channel> = serde_json::from_reader(file)?;
+        Ok(Some(channels))
+    } else {
+        Ok(None)
+    }
 }
 
 fn to_xmltv_time(unix_time: i64) -> Result<String> {
@@ -299,6 +323,21 @@ fn to_xmltv<R: Read>(channels: Vec<Channel>, extra: Option<EventReader<R>>, mapp
     Ok(String::from_utf8(buf.into_inner()?)?)
 }
 
+// 获取带EPG的频道列表（优先使用缓存）
+async fn get_channels_with_epg(args: &Args, scheme: &str, host: &str) -> Result<Vec<Channel>> {
+    // 首先尝试从缓存获取
+    if let Ok(cache) = ALL_CHANNELS_EPG.try_lock() {
+        if let Some(ref cached_channels) = *cache {
+            log::info!("Using cached EPG data for {} channels", cached_channels.len());
+            return Ok(cached_channels.clone());
+        }
+    }
+    
+    // 如果没有缓存，实时获取
+    log::info!("No EPG cache found, fetching in real-time");
+    get_channels(args, true, scheme, host).await
+}
+
 async fn parse_extra_xml(url: &str) -> Result<EventReader<Cursor<String>>> {
     let client = Client::builder().build()?;
     let url = reqwest::Url::parse(url)?;
@@ -306,6 +345,112 @@ async fn parse_extra_xml(url: &str) -> Result<EventReader<Cursor<String>>> {
     let xml = response.text().await?;
     let reader = Cursor::new(xml);
     Ok(EventReader::new(reader))
+}
+
+// 获取所有频道的EPG数据
+async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
+    info!("Starting full EPG fetch for all channels");
+    
+    let scheme = "http";
+    let host = &args.bind;
+    
+    // 先获取频道列表（不获取EPG）
+    let channels = get_channels(args, false, scheme, host).await?;
+    
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    
+    let mut tasks = JoinSet::new();
+    let mut channels_with_epg = Vec::new();
+    
+    log::info!("Fetching EPG for {} channels", channels.len());
+    
+    for channel in channels {
+        let params = [
+            ("channelId", format!("{}", channel.id)),
+            ("begin", format!("{}", now - 86400000 * 2)), // 2天前
+            ("end", format!("{}", now + 86400000 * 5)),   // 5天后
+        ];
+        let base_url = get_base_url(&get_client_with_if(args.interface.as_deref())?).await?;
+        let url = reqwest::Url::parse_with_params(
+            format!("{}/EPG/jsp/iptvsnmv3/en/play/ajax/_ajax_getPlaybillList.jsp", base_url).as_str(),
+            params,
+        )?;
+        let client = get_client_with_if(args.interface.as_deref())?;
+        tasks.spawn(async move { (client.get(url).send().await, channel) });
+    }
+    
+    while let Some(Ok((Ok(res), mut channel))) = tasks.join_next().await {
+        if let Ok(play_bill_list) = res.json::<PlaybillList>().await {
+            for bill in play_bill_list.list.into_iter() {
+                channel.epg.push(Program {
+                    start: bill.start_time,
+                    stop: bill.end_time,
+                    title: bill.name.clone(),
+                    desc: bill.name,
+                })
+            }
+            log::debug!("Fetched {} programs for channel '{}'", channel.epg.len(), channel.name);
+        }
+        channels_with_epg.push(channel);
+    }
+    
+    let with_epg = channels_with_epg.iter().filter(|ch| !ch.epg.is_empty()).count();
+    let without_epg = channels_with_epg.len() - with_epg;
+    
+    info!("EPG fetch completed: {} channels with EPG, {} without EPG", with_epg, without_epg);
+    
+    Ok(channels_with_epg)
+}
+
+// 定时获取所有EPG数据
+async fn fetch_all_epg_periodically(args: Data<Args>) {
+    loop {
+        info!("Starting scheduled EPG fetch...");
+        
+        match fetch_all_channels_epg(&args).await {
+            Ok(channels) => {
+                // 保存到缓存
+                if let Ok(mut cache) = ALL_CHANNELS_EPG.try_lock() {
+                    *cache = Some(channels.clone());
+                    
+                    // 保存到文件
+                    if let Err(e) = save_epg_cache(&channels) {
+                        log::error!("Failed to save EPG cache: {}", e);
+                    } else {
+                        info!("EPG cache updated and saved");
+                    }
+                }
+                
+                // 重新生成XMLTV
+                let mapping = args.channel_mapping.as_ref()
+                    .map(|s| parse_channel_mapping(s))
+                    .unwrap_or_default();
+                
+                match to_xmltv(channels.clone(), None::<EventReader<Cursor<String>>>, &mapping) {
+                    Ok(xmltv) => {
+                        if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+                            *cache = Some(xmltv.clone());
+                            
+                            if let Err(e) = save_xmltv_cache(&xmltv) {
+                                log::error!("Failed to save XMLTV cache: {}", e);
+                            } else {
+                                info!("XMLTV regenerated after EPG fetch");
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Failed to regenerate XMLTV: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to fetch EPG data: {}", e);
+            }
+        }
+        
+        // 每6小时执行一次
+        tokio::time::sleep(tokio::time::Duration::from_secs(6 * 3600)).await;
+    }
 }
 
 // 定时生成映射后的XMLTV
@@ -436,6 +581,37 @@ async fn api_cache_status() -> impl Responder {
     HttpResponse::Ok().json(cache_status)
 }
 
+#[post("/api/fetch-epg")]
+async fn api_fetch_epg(args: Data<Args>) -> impl Responder {
+    debug!("Manual EPG fetch triggered");
+    
+    match fetch_all_channels_epg(&args).await {
+        Ok(channels) => {
+            // 保存到缓存
+            if let Ok(mut cache) = ALL_CHANNELS_EPG.try_lock() {
+                *cache = Some(channels.clone());
+                
+                // 保存到文件
+                if let Err(e) = save_epg_cache(&channels) {
+                    log::error!("Failed to save EPG cache: {}", e);
+                } else {
+                    log::info!("EPG cache updated and saved");
+                }
+            }
+            
+            // 统计信息
+            let with_epg = channels.iter().filter(|ch| !ch.epg.is_empty()).count();
+            let without_epg = channels.len() - with_epg;
+            
+            HttpResponse::Ok().json(format!("EPG fetched successfully: {} channels with EPG, {} without EPG", with_epg, without_epg))
+        }
+        Err(e) => {
+            log::error!("Failed to fetch EPG: {}", e);
+            HttpResponse::InternalServerError().json(format!("Failed to fetch EPG: {}", e))
+        }
+    }
+}
+
 #[post("/api/regenerate-xmltv")]
 async fn api_regenerate_xmltv(args: Data<Args>) -> impl Responder {
     debug!("Manual XMLTV regeneration triggered");
@@ -451,7 +627,7 @@ async fn api_regenerate_xmltv(args: Data<Args>) -> impl Responder {
         .map(|s| parse_channel_mapping(s))
         .unwrap_or_default();
     
-    match get_channels(&args, true, scheme, host).await {
+    match get_channels_with_epg(&args, scheme, host).await {
         Ok(channels) => {
             let channels_clone = channels.clone();
             match to_xmltv_with_mappings(channels_clone, extra_xml, &mapping).await {
@@ -582,7 +758,7 @@ async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> Result<HttpResponse,
         .map(|s| parse_channel_mapping(s))
         .unwrap_or_default();
         
-    let channels = get_channels(&args, true, &scheme, &host).await?;
+    let channels = get_channels_with_epg(&args, &scheme, &host).await?;
     let xml = to_xmltv_with_mappings(channels, extra_xml, &mapping).await?;
     
     // 缓存生成的结果
@@ -766,38 +942,63 @@ async fn main() -> std::io::Result<()> {
         }
     }
     
-    // 如果没有缓存，立即生成一个
+    // 加载EPG缓存
+    if let Ok(Some(epg_cache)) = load_epg_cache() {
+        if let Ok(mut cache) = ALL_CHANNELS_EPG.try_lock() {
+            *cache = Some(epg_cache);
+            log::info!("Loaded EPG cache from file");
+        }
+    }
+    
+    // 如果没有XMLTV缓存，立即生成一个
     if !has_cache {
         log::info!("No XMLTV cache found, generating initial cache...");
         let scheme = "http";
         let host = &args.bind;
         
-        match get_channels(&args, true, scheme, host).await {
-            Ok(channels) => {
-                let mapping = args.channel_mapping.as_ref()
-                    .map(|s| parse_channel_mapping(s))
-                    .unwrap_or_default();
-                
-                match to_xmltv(channels, None::<EventReader<Cursor<String>>>, &mapping) {
-                    Ok(xmltv) => {
-                        if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
-                            *cache = Some(xmltv.clone());
-                            
-                            // 保存到文件
-                            if let Err(e) = save_xmltv_cache(&xmltv) {
-                                log::error!("Failed to save XMLTV cache: {}", e);
-                            } else {
-                                log::info!("Initial XMLTV cache generated and saved");
-                            }
-                        }
-                    }
+        // 优先使用缓存的EPG数据
+        let channels = if let Ok(cache) = ALL_CHANNELS_EPG.try_lock() {
+            if let Some(ref cached_channels) = *cache {
+                log::info!("Using cached EPG data for XMLTV generation");
+                cached_channels.clone()
+            } else {
+                match get_channels(&args, true, scheme, host).await {
+                    Ok(channels) => channels,
                     Err(e) => {
-                        log::error!("Failed to generate initial XMLTV: {}", e);
+                        log::error!("Failed to get channels for initial XMLTV: {}", e);
+                        return Ok(());
+                    }
+                }
+            }
+        } else {
+            match get_channels(&args, true, scheme, host).await {
+                Ok(channels) => channels,
+                Err(e) => {
+                    log::error!("Failed to get channels for initial XMLTV: {}", e);
+                    return Ok(());
+                }
+            }
+        };
+        
+        let mapping = args.channel_mapping.as_ref()
+            .map(|s| parse_channel_mapping(s))
+            .unwrap_or_default();
+        
+        match to_xmltv(channels, None::<EventReader<Cursor<String>>>, &mapping) {
+            Ok(xmltv) => {
+                if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+                    *cache = Some(xmltv.clone());
+                    
+                    // 保存到文件
+                    if let Err(e) = save_xmltv_cache(&xmltv) {
+                        log::error!("Failed to save XMLTV cache: {}", e);
+                    } else {
+                        log::info!("Initial XMLTV cache generated and saved");
                     }
                 }
             }
             Err(e) => {
-                log::error!("Failed to get channels for initial XMLTV: {}", e);
+                log::error!("Failed to generate initial XMLTV: {}", e);
             }
         }
     }
@@ -806,9 +1007,15 @@ async fn main() -> std::io::Result<()> {
     let args_data = Data::new(args.clone());
     
     // 启动定时任务
-    let task_args = args_data.clone();
+    let task_args1 = args_data.clone();
     tokio::spawn(async move {
-        generate_mapped_xmltv_periodically(task_args).await;
+        generate_mapped_xmltv_periodically(task_args1).await;
+    });
+    
+    // 启动EPG获取定时任务
+    let task_args2 = args_data.clone();
+    tokio::spawn(async move {
+        fetch_all_epg_periodically(task_args2).await;
     });
     
     HttpServer::new(move || {
@@ -820,6 +1027,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_set_channel_mappings)
             .service(api_get_channel_mappings)
             .service(api_cache_status)
+            .service(api_fetch_epg)
             .service(api_regenerate_xmltv)
             .service(xmltv_route)
             .service(playlist)
