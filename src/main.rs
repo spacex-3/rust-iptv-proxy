@@ -393,6 +393,10 @@ async fn fetch_all_channels_epg_simple(args: &Args) -> Result<Vec<Channel>> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let mut with_epg_count = 0;
     
+    // 创建已认证的client，与get_channels使用相同的方式
+    let client = get_client_with_if(args.interface.as_deref())?;
+    let base_url = get_base_url(&client, args).await?;
+    
     // 限制并发数为10
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
     let mut handles = Vec::new();
@@ -406,9 +410,8 @@ async fn fetch_all_channels_epg_simple(args: &Args) -> Result<Vec<Channel>> {
             ("end", format!("{}", now + 86400000 * 5)),   // 5天后
         ];
         
-        // 为每个频道创建新的client和认证
-        let client = get_client_with_if(args.interface.as_deref())?;
-        let base_url = get_base_url(&client, args).await?;
+        // 复用同一个client和base_url，与get_channels保持一致
+        let client = client.clone();
         let url = reqwest::Url::parse_with_params(
             format!("{}/EPG/jsp/iptvsnmv3/en/play/ajax/_ajax_getPlaybillList.jsp", base_url).as_str(),
             params,
@@ -448,7 +451,10 @@ async fn fetch_all_channels_epg_simple(args: &Args) -> Result<Vec<Channel>> {
     for handle in handles {
         match handle.await {
             Ok((Ok(res), mut channel)) => {
-                match res.json::<PlaybillList>().await {
+                // 先获取响应文本，以便在解析失败时记录
+                let response_text = res.text().await.unwrap_or_else(|_| "Failed to get response text".to_string());
+                
+                match serde_json::from_str::<PlaybillList>(&response_text) {
                     Ok(play_bill_list) => {
                         for bill in play_bill_list.list.into_iter() {
                             channel.epg.push(Program {
@@ -465,6 +471,8 @@ async fn fetch_all_channels_epg_simple(args: &Args) -> Result<Vec<Channel>> {
                     }
                     Err(e) => {
                         log::warn!("✗ 解析 '{}' 的EPG数据失败: {}", channel.name, e);
+                        // 记录响应内容的前100个字符，方便调试
+                        log::debug!("响应内容: {}", &response_text[..response_text.len().min(100)]);
                     }
                 }
                 channels_with_epg.push(channel);
