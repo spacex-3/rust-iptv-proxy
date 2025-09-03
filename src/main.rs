@@ -9,6 +9,7 @@ use chrono::{FixedOffset, TimeZone, Utc};
 use log::{debug, info};
 use serde::Deserialize;
 use reqwest::Client;
+use tokio::task::JoinSet;
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{File, OpenOptions},
@@ -18,7 +19,7 @@ use std::{
     process::exit,
     str::FromStr,
     sync::{Mutex, LazyLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use xml::{
     reader::XmlEvent as XmlReadEvent,
@@ -30,7 +31,7 @@ mod args;
 use args::Args;
 
 mod iptv;
-use iptv::{get_channels, get_icon, Channel};
+use iptv::{get_channels, get_icon, Channel, Program};
 
 mod proxy;
 

@@ -42,7 +42,7 @@ fn categorize_channel(channel_name: &str) -> String {
     }
 }
 
-fn get_client_with_if(#[allow(unused_variables)] if_name: Option<&str>) -> Result<Client> {
+pub(crate) fn get_client_with_if(#[allow(unused_variables)] if_name: Option<&str>) -> Result<Client> {
     let timeout = Duration::new(5, 0);
     #[allow(unused_mut)]
     let mut client = Client::builder().timeout(timeout).cookie_store(true);
@@ -67,7 +67,7 @@ fn get_client_with_if(#[allow(unused_variables)] if_name: Option<&str>) -> Resul
     Ok(client.build()?)
 }
 
-async fn get_base_url(client: &Client, args: &Args) -> Result<String> {
+pub(crate) async fn get_base_url(client: &Client, args: &Args) -> Result<String> {
     let user = args.user.as_str();
 
     let params = [("Action", "Login"), ("return_type", "1"), ("UserID", user)];
