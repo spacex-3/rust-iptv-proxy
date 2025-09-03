@@ -324,7 +324,7 @@ pub(crate) async fn get_icon(args: &Args, id: &str) -> Result<Vec<u8>> {
                 Err(_) => {
                     // 如果获取失败，尝试使用映射
                     if let Some(mapping_str) = &args.channel_mapping {
-                        let mapping = parse_channel_mapping(mapping_str);
+                        let _mapping = parse_channel_mapping(mapping_str);
                         // 这里需要实现通过频道名查找对应ID的逻辑
                         // 暂时返回错误，后续可以完善
                         Err(anyhow!("Icon not found for id: {}", id))

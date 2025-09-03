@@ -1,11 +1,10 @@
 use actix_web::{
     get, post,
-    web::{Data, Path, Query, Json},
+    web::{Data, Query, Json},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
 };
 use actix_files as fs;
 use anyhow::{anyhow, Result};
-use argh::FromArgs;
 use chrono::{FixedOffset, TimeZone, Utc};
 use log::debug;
 use reqwest::Client;
@@ -99,13 +98,13 @@ fn load_xmltv_cache() -> Result<Option<String>> {
 }
 
 // 保存XMLTV缓存
-fn save_xmltv_cache(xmltv: &str) -> Result<()> {
+fn save_xmltv_cache(xmltv_content: &str) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .open(XMLTV_CACHE_FILE)?;
-    file.write_all(xmltv.as_bytes())?;
+    file.write_all(xmltv_content.as_bytes())?;
     Ok(())
 }
 
@@ -427,7 +426,7 @@ async fn index() -> impl Responder {
 }
 
 #[get("/xmltv")]
-async fn xmltv(args: Data<Args>, req: HttpRequest) -> impl Responder {
+async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> impl Responder {
     debug!("Get EPG");
     
     // 首先尝试从缓存获取
@@ -667,7 +666,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_channel_epg)
             .service(api_set_channel_mappings)
             .service(api_get_channel_mappings)
-            .service(xmltv)
+            .service(xmltv_route)
             .service(playlist)
             .service(logo)
             .service(rtsp)
