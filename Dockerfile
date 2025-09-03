@@ -40,3 +40,5 @@ EXPOSE 7878
 
 # 设置入口点
 ENTRYPOINT ["/usr/local/bin/iptv"]
+# 设置默认参数
+CMD ["--user", "${USER}", "--passwd", "${PASSWD}", "--mac", "${MAC}"]
