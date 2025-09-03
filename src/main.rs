@@ -6,7 +6,7 @@ use actix_web::{
 use actix_files as fs;
 use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, TimeZone, Utc};
-use log::{debug, info};
+use log::debug;
 use serde::Deserialize;
 use reqwest::Client;
 use tokio::task::JoinSet;
@@ -31,7 +31,7 @@ mod args;
 use args::Args;
 
 mod iptv;
-use iptv::{get_channels, get_icon, Channel, Program};
+use iptv::{get_channels, get_icon, get_base_url, get_client_with_if, Channel, Program};
 
 mod proxy;
 
@@ -388,7 +388,8 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
             ("begin", format!("{}", now - 86400000 * 2)), // 2天前
             ("end", format!("{}", now + 86400000 * 5)),   // 5天后
         ];
-        let base_url = get_base_url(&get_client_with_if(args.interface.as_deref())?).await?;
+        let client = get_client_with_if(args.interface.as_deref())?;
+        let base_url = get_base_url(&client, &args).await?;
         let url = reqwest::Url::parse_with_params(
             format!("{}/EPG/jsp/iptvsnmv3/en/play/ajax/_ajax_getPlaybillList.jsp", base_url).as_str(),
             params,
