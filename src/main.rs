@@ -346,7 +346,7 @@ async fn to_xmltv_with_mappings<R: Read>(
     };
     
     // 创建映射查找表：频道名 -> ID
-    let name_to_id: HashMap<String, u64> = channels
+    let _name_to_id: HashMap<String, u64> = channels
         .iter()
         .map(|ch| (ch.name.clone(), ch.id))
         .collect();
@@ -356,8 +356,8 @@ async fn to_xmltv_with_mappings<R: Read>(
     for channel in &mut mapped_channels {
         // 如果这个频道被其他频道映射，使用映射频道的EPG
         let mapped_epg = mappings.iter()
-            .filter(|(&from_id, &to_id)| to_id == channel.id)
-            .filter_map(|(&from_id, &to_id)| {
+            .filter(|(&_from_id, &to_id)| to_id == channel.id)
+            .filter_map(|(&from_id, &_to_id)| {
                 channels.iter().find(|ch| ch.id == from_id)
             })
             .find_map(|source_ch| {
@@ -517,14 +517,14 @@ async fn index() -> impl Responder {
 }
 
 #[get("/xmltv")]
-async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> impl Responder {
+async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> Result<HttpResponse, Box<dyn std::error::Error>> {
     debug!("Get EPG");
     
     // 首先尝试从缓存获取
     if let Ok(cache) = MAPPED_XMLTV_CACHE.try_lock() {
         if let Some(ref cached_xmltv) = *cache {
             debug!("Returning cached XMLTV");
-            return HttpResponse::Ok().content_type("text/xml").body(cached_xmltv.clone());
+            return Ok(HttpResponse::Ok().content_type("text/xml").body(cached_xmltv.clone()));
         }
     }
     
@@ -534,7 +534,7 @@ async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> impl Responder {
         if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
             *cache = Some(file_xmltv.clone());
         }
-        return HttpResponse::Ok().content_type("text/xml").body(file_xmltv);
+        return Ok(HttpResponse::Ok().content_type("text/xml").body(file_xmltv));
     }
     
     // 如果都没有，实时生成
@@ -549,33 +549,23 @@ async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> impl Responder {
         .map(|s| parse_channel_mapping(s))
         .unwrap_or_default();
         
-    let xml = get_channels(&args, true, &scheme, &host)
-        .await
-        .and_then(|ch| to_xmltv_with_mappings(ch, extra_xml, &mapping).await);
-    match xml {
-        Err(e) => {
-            if let Some(old_xmltv) = OLD_XMLTV.try_lock().ok().and_then(|f| f.to_owned()) {
-                HttpResponse::Ok().content_type("text/xml").body(old_xmltv)
-            } else {
-                HttpResponse::InternalServerError().body(format!("Error getting channels: {}", e))
+    let channels = get_channels(&args, true, &scheme, &host).await?;
+    let xml = to_xmltv_with_mappings(channels, extra_xml, &mapping).await?;
+    
+    // 缓存生成的结果
+    if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+        *cache = Some(xml.clone());
+        
+        // 异步保存到文件
+        let xml_for_save = xml.clone();
+        tokio::spawn(async move {
+            if let Err(e) = save_xmltv_cache(&xml_for_save) {
+                log::error!("Failed to save XMLTV cache: {}", e);
             }
-        }
-        Ok(xml) => {
-            // 缓存生成的结果
-            if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
-                *cache = Some(xml.clone());
-                
-                // 异步保存到文件
-                let xml_for_save = xml.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = save_xmltv_cache(&xml_for_save) {
-                        log::error!("Failed to save XMLTV cache: {}", e);
-                    }
-                });
-            }
-            HttpResponse::Ok().content_type("text/xml").body(xml)
-        }
+        });
     }
+    
+    Ok(HttpResponse::Ok().content_type("text/xml").body(xml))
 }
 
 async fn parse_extra_playlist(url: &str) -> Result<String> {
