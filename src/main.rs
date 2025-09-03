@@ -7,6 +7,7 @@ use actix_files as fs;
 use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, TimeZone, Utc};
 use log::{debug, info};
+use serde::Deserialize;
 use reqwest::Client;
 use std::{
     collections::{BTreeMap, HashMap},
