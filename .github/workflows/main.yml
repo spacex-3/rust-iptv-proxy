@@ -26,14 +26,22 @@ jobs:
         uses: actions/checkout@v4
       - name: Build
         run: |
-          rustup toolchain add nightly
-          rustup +nightly component add rust-src
-          rustup +nightly target add ${{ matrix.target }} || true
+          rustup toolchain add stable
+          rustup +stable target add ${{ matrix.target }}
           mkdir -p ~/openwrt
           wget "${{ matrix.sdk }}" -qO- | tar --strip-components 1 -C ~/openwrt -xvJ
           toolchain="$(ls -d ~/openwrt/toolchain-*)"
-          export RUSTFLAGS="-C target-feature=-crt-static -Zlocation-detail=none -C linker=$(ls ${toolchain}/bin/*-openwrt-linux-gcc)"
-          cargo +nightly build -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort -r --target ${{ matrix.target }}
+          export PATH="${toolchain}/bin:$PATH"
+          export CC_x86_64_unknown_linux_musl=x86_64-openwrt-linux-gcc
+          export CXX_x86_64_unknown_linux_musl=x86_64-openwrt-linux-g++
+          export AR_x86_64_unknown_linux_musl=x86_64-openwrt-linux-ar
+          export CC_aarch64_unknown_linux_musl=aarch64-openwrt-linux-gcc
+          export CXX_aarch64_unknown_linux_musl=aarch64-openwrt-linux-g++
+          export AR_aarch64_unknown_linux_musl=aarch64-openwrt-linux-ar
+          export CC_mipsel_unknown_linux_musl=mipsel-openwrt-linux-gcc
+          export CXX_mipsel_unknown_linux_musl=mipsel-openwrt-linux-g++
+          export AR_mipsel_unknown_linux_musl=mipsel-openwrt-linux-ar
+          cargo +stable build --release --target ${{ matrix.target }}
           upx -9 target/${{ matrix.target }}/release/iptv
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -52,14 +60,11 @@ jobs:
         msystem: UCRT64
         pacboy: upx:p
     - name: Build
-      env:
-        RUSTFLAGS: -C target-feature=-crt-static -Zlocation-detail=none
       run: |
         rustup set default-host x86_64-pc-windows-gnu
-        rustup toolchain add nightly-gnu
-        rustup +nightly component add rust-src
-        cargo +nightly build -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort -r --target x86_64-pc-windows-gnu
-        msys2 -c 'upx -9 ./target/x86_64-pc-windows-gnu/release/iptv.exe'
+        rustup toolchain add stable-gnu
+        cargo +stable build --release --target x86_64-pc-windows-gnu
+        upx -9 ./target/x86_64-pc-windows-gnu/release/iptv.exe
     - name: Upload
       uses: actions/upload-artifact@v4
       with:

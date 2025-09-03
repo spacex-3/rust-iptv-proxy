@@ -1,0 +1,14 @@
+[target.x86_64-unknown-linux-musl]
+linker = "x86_64-openwrt-linux-gcc"
+ar = "x86_64-openwrt-linux-ar"
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-openwrt-linux-gcc"
+ar = "aarch64-openwrt-linux-ar"
+
+[target.mipsel-unknown-linux-musl]
+linker = "mipsel-openwrt-linux-gcc"
+ar = "mipsel-openwrt-linux-ar"
+
+[build]
+target = "x86_64-unknown-linux-musl"
