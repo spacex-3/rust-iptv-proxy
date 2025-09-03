@@ -6,7 +6,7 @@ use actix_web::{
 use actix_files as fs;
 use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, TimeZone, Utc};
-use log::debug;
+use log::{debug, info};
 use reqwest::Client;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -17,6 +17,7 @@ use std::{
     process::exit,
     str::FromStr,
     sync::{Mutex, LazyLock},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use xml::{
     reader::XmlEvent as XmlReadEvent,
@@ -40,6 +41,21 @@ static ALL_CHANNELS_EPG: LazyLock<Mutex<Option<Vec<Channel>>>> = LazyLock::new(|
 const MAPPINGS_FILE: &str = "channel_mappings.json";
 const XMLTV_CACHE_FILE: &str = "xmltv_cache.xml";
 const EPG_CACHE_FILE: &str = "epg_cache.json";
+
+#[derive(Deserialize)]
+struct PlaybillList {
+    #[serde(rename = "playbillLites")]
+    list: Vec<Bill>,
+}
+
+#[derive(Deserialize)]
+struct Bill {
+    name: String,
+    #[serde(rename = "startTime")]
+    start_time: i64,
+    #[serde(rename = "endTime")]
+    end_time: i64,
+}
 
 fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
     let mut mapping = HashMap::new();
@@ -349,7 +365,7 @@ async fn parse_extra_xml(url: &str) -> Result<EventReader<Cursor<String>>> {
 
 // 获取所有频道的EPG数据
 async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
-    info!("Starting full EPG fetch for all channels");
+    log::info!("Starting full EPG fetch for all channels");
     
     let scheme = "http";
     let host = &args.bind;
@@ -397,7 +413,7 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
     let with_epg = channels_with_epg.iter().filter(|ch| !ch.epg.is_empty()).count();
     let without_epg = channels_with_epg.len() - with_epg;
     
-    info!("EPG fetch completed: {} channels with EPG, {} without EPG", with_epg, without_epg);
+    log::info!("EPG fetch completed: {} channels with EPG, {} without EPG", with_epg, without_epg);
     
     Ok(channels_with_epg)
 }
@@ -405,7 +421,7 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
 // 定时获取所有EPG数据
 async fn fetch_all_epg_periodically(args: Data<Args>) {
     loop {
-        info!("Starting scheduled EPG fetch...");
+        log::info!("Starting scheduled EPG fetch...");
         
         match fetch_all_channels_epg(&args).await {
             Ok(channels) => {
@@ -417,7 +433,7 @@ async fn fetch_all_epg_periodically(args: Data<Args>) {
                     if let Err(e) = save_epg_cache(&channels) {
                         log::error!("Failed to save EPG cache: {}", e);
                     } else {
-                        info!("EPG cache updated and saved");
+                        log::info!("EPG cache updated and saved");
                     }
                 }
                 
@@ -434,7 +450,7 @@ async fn fetch_all_epg_periodically(args: Data<Args>) {
                             if let Err(e) = save_xmltv_cache(&xmltv) {
                                 log::error!("Failed to save XMLTV cache: {}", e);
                             } else {
-                                info!("XMLTV regenerated after EPG fetch");
+                                log::info!("XMLTV regenerated after EPG fetch");
                             }
                         }
                     }
