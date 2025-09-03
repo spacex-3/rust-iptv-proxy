@@ -382,33 +382,46 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
     
     log::info!("Fetching EPG for {} channels", channels.len());
     
+    // 创建一个client复用
+    let client = get_client_with_if(args.interface.as_deref())?;
+    let base_url = get_base_url(&client, &args).await?;
+    
     for channel in channels {
         let params = [
             ("channelId", format!("{}", channel.id)),
             ("begin", format!("{}", now - 86400000 * 2)), // 2天前
             ("end", format!("{}", now + 86400000 * 5)),   // 5天后
         ];
-        let client = get_client_with_if(args.interface.as_deref())?;
-        let base_url = get_base_url(&client, &args).await?;
         let url = reqwest::Url::parse_with_params(
             format!("{}/EPG/jsp/iptvsnmv3/en/play/ajax/_ajax_getPlaybillList.jsp", base_url).as_str(),
             params,
         )?;
-        let client = get_client_with_if(args.interface.as_deref())?;
+        let client = client.clone(); // 克隆client供每个task使用
         tasks.spawn(async move { (client.get(url).send().await, channel) });
     }
     
     while let Some(Ok((Ok(res), mut channel))) = tasks.join_next().await {
-        if let Ok(play_bill_list) = res.json::<PlaybillList>().await {
-            for bill in play_bill_list.list.into_iter() {
-                channel.epg.push(Program {
-                    start: bill.start_time,
-                    stop: bill.end_time,
-                    title: bill.name.clone(),
-                    desc: bill.name,
-                })
+        log::debug!("Processing response for channel: {}", channel.name);
+        
+        let response_text = res.text().await.unwrap_or_else(|_| "Failed to get response text".to_string());
+        
+        match serde_json::from_str::<PlaybillList>(&response_text) {
+            Ok(play_bill_list) => {
+                log::debug!("Got {} programs for channel '{}'", play_bill_list.list.len(), channel.name);
+                for bill in play_bill_list.list.into_iter() {
+                    channel.epg.push(Program {
+                        start: bill.start_time,
+                        stop: bill.end_time,
+                        title: bill.name.clone(),
+                        desc: bill.name,
+                    })
+                }
+                log::debug!("Fetched {} programs for channel '{}'", channel.epg.len(), channel.name);
             }
-            log::debug!("Fetched {} programs for channel '{}'", channel.epg.len(), channel.name);
+            Err(e) => {
+                log::warn!("Failed to parse EPG data for channel '{}': {}", channel.name, e);
+                log::debug!("Response for channel {}: {}", channel.name, response_text);
+            }
         }
         channels_with_epg.push(channel);
     }
