@@ -415,7 +415,7 @@ async fn api_cache_status() -> impl Responder {
     let cache_status = if let Ok(cache) = MAPPED_XMLTV_CACHE.try_lock() {
         match *cache {
             Some(_) => {
-                if let Ok(Some(file_cache)) = load_xmltv_cache() {
+                if let Ok(Some(_file_cache)) = load_xmltv_cache() {
                     "cached_in_memory_and_file"
                 } else {
                     "cached_in_memory_only"
@@ -453,7 +453,8 @@ async fn api_regenerate_xmltv(args: Data<Args>) -> impl Responder {
     
     match get_channels(&args, true, scheme, host).await {
         Ok(channels) => {
-            match to_xmltv_with_mappings(channels, extra_xml, &mapping).await {
+            let channels_clone = channels.clone();
+            match to_xmltv_with_mappings(channels_clone, extra_xml, &mapping).await {
                 Ok(xmltv) => {
                     // 更新缓存
                     if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
@@ -777,7 +778,7 @@ async fn main() -> std::io::Result<()> {
                     .map(|s| parse_channel_mapping(s))
                     .unwrap_or_default();
                 
-                match to_xmltv(channels, None, &mapping) {
+                match to_xmltv(channels, None::<EventReader<Cursor<String>>>, &mapping) {
                     Ok(xmltv) => {
                         if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
                             *cache = Some(xmltv.clone());
