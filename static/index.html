@@ -595,6 +595,7 @@
 
     <script>
         let channels = [];
+        let allChannels = []; // 存储所有频道数据，用于映射查找
         let isDarkMode = false;
         let currentQualityFilter = 'all';
         let currentChannel = null;
@@ -962,6 +963,9 @@
                 } else {
                     channels = await response.json();
                 }
+                
+                // 更新 allChannels 用于映射查找
+                allChannels = [...channels];
                 
                 console.log(`加载了 ${channels.length} 个频道`);
                 if (channels.length > 0) {
