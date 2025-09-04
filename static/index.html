@@ -754,37 +754,59 @@
                 </div>
             `;
             
-            // 增加等待时间到7秒
-            await new Promise(resolve => setTimeout(resolve, 7000));
+            // 首先尝试从已加载的频道数据中获取EPG
+            console.log(`Looking for EPG data for channel ${mappedChannelId}`);
             
-            let retries = 3; // 增加重试次数到3次
+            // 查找频道数据
+            let channelData = null;
+            
+            // 先检查映射的频道
+            if (mappedChannelId !== channelId) {
+                channelData = allChannels.find(ch => ch.id === mappedChannelId);
+            }
+            
+            // 如果没有找到映射的频道或没有映射，使用原始频道
+            if (!channelData) {
+                channelData = allChannels.find(ch => ch.id === channelId);
+            }
+            
+            if (channelData && channelData.epg && channelData.epg.length > 0) {
+                console.log(`Found ${channelData.epg.length} programs in loaded data for channel ${channelData.name}`);
+                renderEpg(channelData.epg);
+                return;
+            }
+            
+            console.log(`No EPG data found in loaded channels, trying API...`);
+            
+            // 如果本地没有数据，再从API获取
+            let retries = 3;
             while (retries > 0) {
                 try {
-                    console.log(`正在获取频道 ${mappedChannelId} 的EPG数据`);
+                    console.log(`Fetching EPG data from API for channel ${mappedChannelId}`);
                     const response = await fetch(`/api/channel/${mappedChannelId}/epg`);
                     if (!response.ok) {
                         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                     }
                     const epgData = await response.json();
-                    console.log(`获取到 ${epgData.length} 条EPG数据`);
+                    console.log(`Got ${epgData.length} programs from API`);
                     renderEpg(epgData);
                     break;
                 } catch (error) {
-                    console.error('EPG获取错误:', error);
+                    console.error('EPG fetch error:', error);
                     retries--;
                     if (retries > 0) {
                         listContainer.innerHTML = `
                             <div class="loading">
                                 <div class="spinner"></div>
-                                网络错误，正在重试... (剩余 ${retries} 次)
+                                Network error, retrying... (${retries} left)
                             </div>
                         `;
-                        await new Promise(resolve => setTimeout(resolve, 7000)); // 每次重试等待7秒
+                        await new Promise(resolve => setTimeout(resolve, 3000));
                     } else {
                         listContainer.innerHTML = `
                             <div class="error">
-                                加载节目单失败: ${error.message}<br>
-                                <small>请检查网络连接或稍后重试</small>
+                                Failed to load EPG: ${error.message}<br>
+                                <small>Please check network or try again later</small>
                             </div>
                         `;
                     }

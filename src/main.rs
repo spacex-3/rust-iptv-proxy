@@ -882,28 +882,41 @@ async fn api_channel_epg(args: Data<Args>, req: HttpRequest, path: Path<u64>) ->
     // 首先尝试从缓存获取EPG数据
     if let Ok(cache) = ALL_CHANNELS_EPG.try_lock() {
         if let Some(ref cached_channels) = *cache {
-            debug!("Using cached EPG data for channel {}", effective_channel_id);
+            info!("EPG cache has {} channels, looking for channel ID {}", cached_channels.len(), effective_channel_id);
             if let Some(channel) = cached_channels.iter().find(|c| c.id == effective_channel_id) {
+                info!("Found channel {} ({}) in cache with {} programs", effective_channel_id, channel.name, channel.epg.len());
                 return HttpResponse::Ok().json(&channel.epg);
             } else {
                 // 缓存中没有找到该频道，返回空数组而不是错误
-                debug!("Channel {} not found in cache", effective_channel_id);
+                warn!("Channel {} not found in cache", effective_channel_id);
+                // 列出缓存中的前10个频道ID用于调试
+                let cached_ids: Vec<u64> = cached_channels.iter().map(|c| c.id).take(10).collect();
+                warn!("Cached channel IDs (first 10): {:?}", cached_ids);
                 return HttpResponse::Ok().json(Vec::<Program>::new());
             }
+        } else {
+            warn!("EPG cache is empty - this might be the issue");
         }
+    } else {
+        warn!("Failed to lock EPG cache");
     }
     
     // 如果没有缓存，实时获取（这种情况应该很少见）
     debug!("No EPG cache available, fetching in real-time");
+    // 如果实时获取失败，返回空数组而不是错误
     match get_channels(&args, true, &scheme, &host).await {
         Ok(channels) => {
             if let Some(channel) = channels.iter().find(|c| c.id == effective_channel_id) {
                 HttpResponse::Ok().json(&channel.epg)
             } else {
-                HttpResponse::NotFound().json(format!("Channel {} not found", effective_channel_id))
+                debug!("Channel {} not found in real-time fetch", effective_channel_id);
+                HttpResponse::Ok().json(Vec::<Program>::new())
             }
         },
-        Err(e) => HttpResponse::InternalServerError().json(format!("Error getting channel EPG: {}", e)),
+        Err(e) => {
+            warn!("Failed to fetch channels in real-time: {}", e);
+            HttpResponse::Ok().json(Vec::<Program>::new())
+        }
     }
 }
 
@@ -1200,11 +1213,15 @@ async fn main() -> std::io::Result<()> {
     }
     
     // 加载EPG缓存
+    let mut has_epg_cache = false;
     if let Ok(Some(epg_cache)) = load_epg_cache() {
         if let Ok(mut cache) = ALL_CHANNELS_EPG.try_lock() {
             *cache = Some(epg_cache);
             log::info!("Loaded EPG cache from file");
+            has_epg_cache = true;
         }
+    } else {
+        log::info!("No EPG cache file found");
     }
     
     // 如果没有XMLTV缓存，立即生成一个
@@ -1240,6 +1257,20 @@ async fn main() -> std::io::Result<()> {
         let mapping = args.channel_mapping.as_ref()
             .map(|s| parse_channel_mapping(s))
             .unwrap_or_default();
+        
+        // 保存EPG数据到缓存
+        if !has_epg_cache {
+            log::info!("Saving EPG data to cache...");
+            if let Ok(mut cache) = ALL_CHANNELS_EPG.try_lock() {
+                *cache = Some(channels.clone());
+                if let Err(e) = save_epg_cache(&channels) {
+                    log::error!("Failed to save EPG cache: {}", e);
+                } else {
+                    log::info!("EPG cache saved");
+                    has_epg_cache = true;
+                }
+            }
+        }
         
         match to_xmltv(channels, None::<EventReader<Cursor<String>>>, &mapping) {
             Ok(xmltv) => {
