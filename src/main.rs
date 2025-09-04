@@ -244,7 +244,51 @@ fn to_xmltv<R: Read>(channels: Vec<Channel>, extra: Option<EventReader<R>>, mapp
         
         // 首先检查是否有映射
         if let Ok(mappings) = CHANNEL_MAPPINGS.try_lock() {
-            if let Some(&mapped_id) = mappings.get(&channel.id) {
+            log::debug!("Checking mappings for channel '{}' ({}): found {} mappings", 
+                channel.name, channel.id, mappings.len());
+            for (&from_id, &to_id) in mappings.iter() {
+                log::debug!("  Mapping: {} -> {}", from_id, to_id);
+            }
+            
+            // 查找是否有其他频道映射到当前频道
+            let mut source_channels = Vec::new();
+            for (&from_id, &to_id) in mappings.iter() {
+                if to_id == channel.id {
+                    source_channels.push(from_id);
+                }
+            }
+            
+            if !source_channels.is_empty() {
+                // 当前频道是映射的目标，使用自己的EPG数据
+                log::debug!("Channel '{}' ({}) is target for sources: {:?}", channel.name, channel.id, source_channels);
+                // 使用自己的EPG数据（因为它是目标频道）
+                if !channel.epg.is_empty() {
+                    mapped_from = format!("target for channels {:?}", source_channels);
+                    log::debug!("Channel '{}' ({}) using its own EPG ({} programs) as mapping target", 
+                        channel.name, channel.id, channel.epg.len());
+                    
+                    for epg in channel.epg.iter() {
+                        writer.write(
+                            XmlWriteEvent::start_element("programme")
+                                .attr("start", &format!("{} +0800", to_xmltv_time(epg.start)?))
+                                .attr("stop", &format!("{} +0800", to_xmltv_time(epg.stop)?))
+                                .attr("channel", &format!("{}", channel.id)),
+                        )?;
+                        writer.write(XmlWriteEvent::start_element("title").attr("lang", "chi"))?;
+                        writer.write(XmlWriteEvent::characters(&epg.title))?;
+                        writer.write(XmlWriteEvent::end_element())?;
+                        if !epg.desc.is_empty() {
+                            writer.write(XmlWriteEvent::start_element("desc"))?;
+                            writer.write(XmlWriteEvent::characters(&epg.desc))?;
+                            writer.write(XmlWriteEvent::end_element())?;
+                        }
+                        writer.write(XmlWriteEvent::end_element())?;
+                    }
+                    mapped_epg_used = true;
+                }
+            } else if let Some(&mapped_id) = mappings.get(&channel.id) {
+                // 当前频道是映射的源，使用目标频道的EPG数据
+                log::debug!("Channel '{}' ({}) is source, mapping to target {}", channel.name, channel.id, mapped_id);
                 if let Some(mapped_channel) = channels.iter().find(|ch| ch.id == mapped_id) {
                     if !mapped_channel.epg.is_empty() {
                         // 使用映射频道的EPG数据
@@ -650,6 +694,12 @@ async fn api_set_channel_mappings(req: Json<MappingRequest>) -> impl Responder {
         // 清除XMLTV缓存，强制重新生成
         if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
             *cache = None;
+        }
+        
+        // 清除EPG缓存，强制重新获取频道数据
+        if let Ok(mut cache) = ALL_CHANNELS_EPG.try_lock() {
+            *cache = None;
+            log::info!("EPG cache cleared due to mapping changes");
         }
         
         HttpResponse::Ok().json("Mappings updated successfully")

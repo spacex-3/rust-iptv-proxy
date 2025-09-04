@@ -990,6 +990,55 @@
             }
         }
 
+        // 获取EPG指示器样式类
+        function getEpgIndicatorClass(channel) {
+            // 检查是否有映射
+            const mappedChannelId = channelMappings.get(channel.id);
+            if (mappedChannelId) {
+                // 如果有映射，查找映射的频道
+                const mappedChannel = allChannels.find(ch => ch.id === mappedChannelId);
+                if (mappedChannel && mappedChannel.epg && mappedChannel.epg.length > 0) {
+                    return 'epg-available';
+                }
+            }
+            // 如果没有映射或映射的频道没有EPG，使用自己的EPG状态
+            return (channel.epg && channel.epg.length > 0) ? 'epg-available' : 'epg-unavailable';
+        }
+
+        // 获取EPG指示器标题
+        function getEpgIndicatorTitle(channel) {
+            // 检查是否有映射
+            const mappedChannelId = channelMappings.get(channel.id);
+            if (mappedChannelId) {
+                // 如果有映射，查找映射的频道
+                const mappedChannel = allChannels.find(ch => ch.id === mappedChannelId);
+                if (mappedChannel && mappedChannel.epg && mappedChannel.epg.length > 0) {
+                    const mappedChannelName = allChannels.find(ch => ch.id === mappedChannelId)?.name || mappedChannelId;
+                    return `通过映射从 ${mappedChannelName} 获取了 ${mappedChannel.epg.length} 个节目`;
+                }
+            }
+            // 如果没有映射或映射的频道没有EPG，使用自己的EPG状态
+            if (channel.epg && channel.epg.length > 0) {
+                return `有 ${channel.epg.length} 个节目`;
+            }
+            return '无EPG数据';
+        }
+
+        // 获取EPG指示器符号
+        function getEpgIndicatorSymbol(channel) {
+            // 检查是否有映射
+            const mappedChannelId = channelMappings.get(channel.id);
+            if (mappedChannelId) {
+                // 如果有映射，查找映射的频道
+                const mappedChannel = allChannels.find(ch => ch.id === mappedChannelId);
+                if (mappedChannel && mappedChannel.epg && mappedChannel.epg.length > 0) {
+                    return '●'; // 实心圆表示有EPG
+                }
+            }
+            // 如果没有映射或映射的频道没有EPG，使用自己的EPG状态
+            return (channel.epg && channel.epg.length > 0) ? '●' : '○';
+        }
+
         function renderChannels(channelsToRender) {
             const container = document.getElementById('channels');
             if (channelsToRender.length === 0) {
@@ -1017,9 +1066,9 @@
                             <div style="flex: 1;">
                                 <div style="display: flex; align-items: center; justify-content: space-between;">
                                     <h3 style="margin: 0;">${channel.name}</h3>
-                                    <span class="epg-indicator ${channel.epg && channel.epg.length > 0 ? 'epg-available' : 'epg-unavailable'}" 
-                                          title="${channel.epg && channel.epg.length > 0 ? `有 ${channel.epg.length} 个节目` : '无EPG数据'}">
-                                        ${channel.epg && channel.epg.length > 0 ? '●' : '○'}
+                                    <span class="epg-indicator ${getEpgIndicatorClass(channel)}" 
+                                          title="${getEpgIndicatorTitle(channel)}">
+                                        ${getEpgIndicatorSymbol(channel)}
                                     </span>
                                 </div>
                                 <p><strong>分类:</strong> ${category}</p>
