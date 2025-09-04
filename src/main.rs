@@ -223,12 +223,6 @@ fn to_xmltv<R: Read>(channels: Vec<Channel>, extra: Option<EventReader<R>>, mapp
         
         // 首先检查是否有映射
         if let Ok(mappings) = CHANNEL_MAPPINGS.try_lock() {
-            log::debug!("Checking mappings for channel '{}' ({}): found {} mappings", 
-                channel.name, channel.id, mappings.len());
-            for (&from_id, &to_id) in mappings.iter() {
-                log::debug!("  Mapping: {} -> {}", from_id, to_id);
-            }
-            
             // 查找是否有其他频道映射到当前频道
             let mut source_channels = Vec::new();
             for (&from_id, &to_id) in mappings.iter() {
@@ -397,7 +391,12 @@ async fn get_epg_from_xmltv_cache() -> Result<HashMap<u64, Vec<Program>>> {
     // 首先尝试从内存缓存获取
     if let Ok(cache) = MAPPED_XMLTV_CACHE.try_lock() {
         if let Some(ref xmltv_content) = *cache {
-            debug!("Using in-memory XMLTV cache");
+            debug!("Using in-memory XMLTV cache, size: {} bytes", xmltv_content.len());
+            // 临时调试：输出XMLTV文件的前500个字符
+            if xmltv_content.len() > 0 {
+                let preview = xmltv_content.chars().take(500).collect::<String>();
+                debug!("XMLTV cache preview: {}", preview);
+            }
             return parse_epg_from_xmltv(xmltv_content);
         }
     }
@@ -405,7 +404,12 @@ async fn get_epg_from_xmltv_cache() -> Result<HashMap<u64, Vec<Program>>> {
     // 如果内存没有，尝试从文件加载
     match load_xmltv_cache() {
         Ok(Some(xmltv_content)) => {
-            debug!("Loaded XMLTV from file cache");
+            debug!("Loaded XMLTV from file cache, size: {} bytes", xmltv_content.len());
+            // 临时调试：输出XMLTV文件的前500个字符
+            if xmltv_content.len() > 0 {
+                let preview = xmltv_content.chars().take(500).collect::<String>();
+                debug!("XMLTV file preview: {}", preview);
+            }
             // 更新内存缓存
             if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
                 *cache = Some(xmltv_content.clone());

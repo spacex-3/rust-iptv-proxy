@@ -7,10 +7,16 @@ use crate::Program;
 
 // 从XMLTV缓存中解析EPG数据
 pub fn parse_epg_from_xmltv(xmltv_content: &str) -> Result<HashMap<u64, Vec<Program>>> {
+    debug!("Parsing XMLTV content, length: {} bytes", xmltv_content.len());
+    if xmltv_content.len() < 100 {
+        debug!("XMLTV content preview: {}", xmltv_content);
+    }
+    
     let reader = Cursor::new(xmltv_content);
     let parser = EventReader::new(reader);
     
     let mut epg_data = HashMap::new();
+    let mut programme_count = 0;
     let mut current_channel_id = None;
     let mut current_program = None;
     let mut in_title = false;
@@ -23,6 +29,7 @@ pub fn parse_epg_from_xmltv(xmltv_content: &str) -> Result<HashMap<u64, Vec<Prog
             Ok(XmlReadEvent::StartElement { name, attributes, .. }) => {
                 match name.local_name.as_str() {
                     "programme" => {
+                        programme_count += 1;
                         // 解析频道ID
                         let channel_attr = attributes.iter()
                             .find(|attr| attr.name.local_name == "channel")
@@ -45,10 +52,16 @@ pub fn parse_epg_from_xmltv(xmltv_content: &str) -> Result<HashMap<u64, Vec<Prog
                                 .unwrap_or(0);
                             
                             if channel_id > 0 && start > 0 && stop > 0 {
+                                debug!("Found programme #{} for channel {}: start={}, stop={}", 
+                                    programme_count, channel_id, 
+                                    chrono::DateTime::from_timestamp_millis(start).unwrap_or_default(),
+                                    chrono::DateTime::from_timestamp_millis(stop).unwrap_or_default());
                                 current_channel_id = Some(channel_id);
                                 current_program = Some((start, stop));
                                 title.clear();
                                 desc.clear();
+                            } else {
+                                debug!("Skipping programme: channel_id={}, start={}, stop={}", channel_id, start, stop);
                             }
                         }
                     }
@@ -120,7 +133,7 @@ pub fn parse_epg_from_xmltv(xmltv_content: &str) -> Result<HashMap<u64, Vec<Prog
         }
     }
     
-    debug!("Parsed EPG data for {} channels", epg_data.len());
+    debug!("Parsed EPG data: {} programmes for {} channels", programme_count, epg_data.len());
     Ok(epg_data)
 }
 
