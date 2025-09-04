@@ -6,7 +6,7 @@ use actix_web::{
 use actix_files as fs;
 use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, TimeZone, Utc};
-use log::debug;
+use log::{debug, info, warn, error};
 use serde::Deserialize;
 use reqwest::Client;
 use std::{
@@ -390,7 +390,7 @@ async fn fetch_all_channels_epg_simple(args: &Args) -> Result<Vec<Channel>> {
         progress.total = channel_count;
     }
     
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let _now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let mut with_epg_count = 0;
     
     // 统计有EPG数据的频道
@@ -552,7 +552,7 @@ async fn generate_mapped_xmltv_periodically(args: Data<Args>) {
     let host = &args.bind;
     
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // 每小时更新一次
+        tokio::time::sleep(tokio::time::Duration::from_secs(21600)).await; // 每6小时更新一次
         
         log::info!("Generating mapped XMLTV cache...");
         
@@ -910,6 +910,52 @@ async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> Result<HttpResponse,
     Ok(HttpResponse::Ok().content_type("text/xml").body(xml))
 }
 
+#[get("/epg.xml")]
+async fn epg_xml_cached() -> impl Responder {
+    debug!("Get cached EPG XML");
+    
+    // 首先尝试从内存缓存获取
+    if let Ok(cache) = MAPPED_XMLTV_CACHE.try_lock() {
+        if let Some(ref cached_xmltv) = *cache {
+            debug!("Returning cached XMLTV from memory");
+            return HttpResponse::Ok()
+                .content_type("text/xml")
+                .append_header(("Cache-Control", "public, max-age=21600")) // 6小时
+                .body(cached_xmltv.clone());
+        }
+    }
+    
+    // 如果内存没有，尝试从文件缓存加载
+    match load_xmltv_cache() {
+        Ok(Some(file_xmltv)) => {
+            debug!("Loaded XMLTV from file cache");
+            // 更新内存缓存
+            if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
+                *cache = Some(file_xmltv.clone());
+            }
+            HttpResponse::Ok()
+                .content_type("text/xml")
+                .append_header(("Cache-Control", "public, max-age=21600")) // 6小时
+                .body(file_xmltv)
+        }
+        Ok(None) => {
+            // 如果没有缓存，返回空XMLTV
+            warn!("No cached EPG data available, returning empty XMLTV");
+            let empty_xmltv = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE tv SYSTEM "xmltv.dtd">
+<tv generator-info-name="iptv-proxy">
+</tv>"#;
+            HttpResponse::Ok()
+                .content_type("text/xml")
+                .body(empty_xmltv.to_string())
+        }
+        Err(e) => {
+            error!("Failed to load XMLTV cache: {}", e);
+            HttpResponse::InternalServerError().body(format!("Failed to load EPG cache: {}", e))
+        }
+    }
+}
+
 async fn parse_extra_playlist(url: &str) -> Result<String> {
     let client = Client::builder().build()?;
     let url = reqwest::Url::parse(url)?;
@@ -1164,6 +1210,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_fetch_epg)
             .service(api_regenerate_xmltv)
             .service(xmltv_route)
+            .service(epg_xml_cached)
             .service(playlist)
             .service(logo)
             .service(rtsp)

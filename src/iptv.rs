@@ -6,7 +6,7 @@ use des::{
 };
 #[cfg(not(any(target_os = "android", target_os = "fuchsia", target_os = "linux")))]
 use local_ip_address::list_afinet_netifas;
-use log::{debug, info};
+use log::{debug, info, warn, error};
 use rand::Rng;
 use regex_lite::Regex;
 use reqwest::Client;
@@ -289,18 +289,59 @@ pub(crate) async fn get_channels(
         tasks.spawn(async move { (client.get(url).send().await, channel) });
     }
     let mut channels = vec![];
-    while let Some(Ok((Ok(res), mut channel))) = tasks.join_next().await {
-        if let Ok(play_bill_list) = res.json::<PlaybillList>().await {
-            for bill in play_bill_list.list.into_iter() {
-                channel.epg.push(Program {
-                    start: bill.start_time,
-                    stop: bill.end_time,
-                    title: bill.name.clone(),
-                    desc: bill.name,
-                })
+    let mut failed_channels = 0;
+    
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok((Ok(res), mut channel)) => {
+                // 成功获取HTTP响应
+                // 先获取响应文本，用于调试
+                let response_text = res.text().await.unwrap_or_else(|_| "Failed to get response text".to_string());
+                
+                match serde_json::from_str::<PlaybillList>(&response_text) {
+                    Ok(play_bill_list) => {
+                        // 成功解析JSON
+                        for bill in play_bill_list.list.into_iter() {
+                            channel.epg.push(Program {
+                                start: bill.start_time,
+                                stop: bill.end_time,
+                                title: bill.name.clone(),
+                                desc: bill.name,
+                            })
+                        }
+                        if !channel.epg.is_empty() {
+                            debug!("✓ 获取到 '{}' 的 {} 个节目", channel.name, channel.epg.len());
+                        }
+                    }
+                    Err(e) => {
+                        // JSON解析失败
+                        warn!("✗ 解析 '{}' 的EPG数据失败: {}", channel.name, e);
+                        // 记录响应内容的前100个字符，方便调试
+                        if response_text.len() > 100 {
+                            debug!("响应内容前100字符: {}", &response_text[..100]);
+                        } else {
+                            debug!("响应内容: {}", response_text);
+                        }
+                    }
+                }
+                channels.push(channel);
+            }
+            Ok((Err(e), channel)) => {
+                // HTTP请求失败
+                warn!("✗ 获取 '{}' 的EPG HTTP请求失败: {}", channel.name, e);
+                channels.push(channel);
+                failed_channels += 1;
+            }
+            Err(e) => {
+                // 任务执行失败（JoinError）
+                error!("✗ EPG获取任务执行失败: {}", e);
+                failed_channels += 1;
             }
         }
-        channels.push(channel);
+    }
+    
+    if failed_channels > 0 {
+        warn!("共有 {} 个频道获取EPG失败", failed_channels);
     }
 
     Ok(channels)
