@@ -554,6 +554,13 @@
                 <button class="filter-btn" onclick="filterByQuality('普通频道')">普通</button>
             </div>
             
+            <div class="filter-section">
+                <span>EPG:</span>
+                <button class="filter-btn active" onclick="filterByEpg('all')" id="epg-all-btn">全部</button>
+                <button class="filter-btn" onclick="filterByEpg('with-epg')" id="epg-with-btn">有节目单</button>
+                <button class="filter-btn" onclick="filterByEpg('without-epg')" id="epg-without-btn">无节目单</button>
+            </div>
+            
             <button class="theme-toggle" onclick="toggleTheme()">
                 <span id="theme-icon">🌙</span>
                 <span id="theme-text">深色模式</span>
@@ -598,6 +605,7 @@
         let allChannels = []; // 存储所有频道数据，用于映射查找
         let isDarkMode = false;
         let currentQualityFilter = 'all';
+        let currentEpgFilter = 'all'; // EPG筛选：all, with-epg, without-epg
         let currentChannel = null;
         let channelMappings = new Map(); // 存储频道映射关系
 
@@ -636,17 +644,22 @@
         function filterByQuality(quality) {
             currentQualityFilter = quality;
             
-            // 更新按钮状态
-            const filterButtons = document.querySelectorAll('.filter-btn');
-            filterButtons.forEach(btn => btn.classList.remove('active'));
+            // 更新质量筛选按钮状态
+            const qualityButtons = document.querySelectorAll('.filter-btn');
+            qualityButtons.forEach(btn => {
+                if (!btn.id.startsWith('epg-')) { // 只处理质量筛选按钮
+                    btn.classList.remove('active');
+                }
+            });
             
-            // 找到对应的按钮并设置为active
-            filterButtons.forEach(btn => {
+            // 找到对应的质量按钮并设置为active
+            qualityButtons.forEach(btn => {
                 const btnText = btn.textContent;
-                if ((quality === 'all' && btnText === '全部') ||
+                if (!btn.id.startsWith('epg-') && 
+                    ((quality === 'all' && btnText === '全部') ||
                     (quality === '超清频道' && btnText === '超清') ||
                     (quality === '高清频道' && btnText === '高清') ||
-                    (quality === '普通频道' && btnText === '普通')) {
+                    (quality === '普通频道' && btnText === '普通'))) {
                     btn.classList.add('active');
                 }
             });
@@ -654,11 +667,82 @@
             renderChannels(getFilteredChannels());
         }
 
-        function getFilteredChannels() {
-            if (currentQualityFilter === 'all') {
-                return channels;
+        function filterByEpg(epgFilter) {
+            currentEpgFilter = epgFilter;
+            
+            // 更新EPG筛选按钮状态
+            const epgButtons = ['epg-all-btn', 'epg-with-btn', 'epg-without-btn'];
+            epgButtons.forEach(btnId => {
+                const btn = document.getElementById(btnId);
+                if (btn) {
+                    btn.classList.remove('active');
+                }
+            });
+            
+            // 设置对应的EPG按钮为active
+            let activeBtnId;
+            switch(epgFilter) {
+                case 'all':
+                    activeBtnId = 'epg-all-btn';
+                    break;
+                case 'with-epg':
+                    activeBtnId = 'epg-with-btn';
+                    break;
+                case 'without-epg':
+                    activeBtnId = 'epg-without-btn';
+                    break;
             }
-            return channels.filter(channel => channel.category === currentQualityFilter);
+            if (activeBtnId) {
+                const activeBtn = document.getElementById(activeBtnId);
+                if (activeBtn) {
+                    activeBtn.classList.add('active');
+                }
+            }
+            
+            renderChannels(getFilteredChannels());
+        }
+
+        function getFilteredChannels() {
+            let filteredChannels = channels;
+            
+            // 先按质量筛选
+            if (currentQualityFilter !== 'all') {
+                filteredChannels = filteredChannels.filter(channel => channel.category === currentQualityFilter);
+            }
+            
+            // 再按EPG筛选
+            if (currentEpgFilter !== 'all') {
+                filteredChannels = filteredChannels.filter(channel => {
+                    const hasEpg = hasChannelEpg(channel);
+                    if (currentEpgFilter === 'with-epg') {
+                        return hasEpg;
+                    } else if (currentEpgFilter === 'without-epg') {
+                        return !hasEpg;
+                    }
+                    return true;
+                });
+            }
+            
+            return filteredChannels;
+        }
+
+        // 检查频道是否有EPG数据（包括映射）
+        function hasChannelEpg(channel) {
+            // 检查频道自身是否有EPG
+            if (channel.epg && channel.epg.length > 0) {
+                return true;
+            }
+            
+            // 检查是否有映射，且映射的源频道有EPG
+            const mappedChannelId = channelMappings.get(channel.id);
+            if (mappedChannelId) {
+                const mappedChannel = allChannels.find(ch => ch.id === mappedChannelId);
+                if (mappedChannel && mappedChannel.epg && mappedChannel.epg.length > 0) {
+                    return true;
+                }
+            }
+            
+            return false;
         }
 
         function loadMappingsFromStorage() {
@@ -1112,7 +1196,18 @@
                 .forEach(ch => {
                     const option = document.createElement('option');
                     option.value = ch.id;
-                    option.textContent = ch.name;
+                    
+                    // 检查频道是否有原始EPG数据
+                    const hasOriginalEpg = ch.epg && ch.epg.length > 0;
+                    const epgIndicator = hasOriginalEpg ? ' ●' : ' ○'; // ● 表示有EPG，○ 表示无EPG
+                    
+                    option.textContent = `${ch.name}${epgIndicator}`;
+                    if (hasOriginalEpg) {
+                        option.title = `${ch.name} - 有 ${ch.epg.length} 个原始节目`;
+                    } else {
+                        option.title = `${ch.name} - 无原始节目单`;
+                    }
+                    
                     mappingSelect.appendChild(option);
                 });
             
