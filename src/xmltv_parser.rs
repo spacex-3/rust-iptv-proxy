@@ -3,6 +3,7 @@ use std::io::Cursor;
 use xml::{reader::XmlEvent as XmlReadEvent, EventReader};
 use anyhow::{anyhow, Result};
 use log::debug;
+use chrono::TimeZone;
 use crate::Program;
 
 // 从XMLTV缓存中解析EPG数据
