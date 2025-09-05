@@ -6,7 +6,7 @@ use actix_web::{
 use actix_files as fs;
 use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, TimeZone, Utc};
-use log::{debug, warn, error};
+use log::{debug, info, warn, error};
 use serde::Deserialize;
 use reqwest::Client;
 use std::{
