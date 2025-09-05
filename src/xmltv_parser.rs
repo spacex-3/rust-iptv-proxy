@@ -52,16 +52,14 @@ pub fn parse_epg_from_xmltv(xmltv_content: &str) -> Result<HashMap<u64, Vec<Prog
                                 .unwrap_or(0);
                             
                             if channel_id > 0 && start > 0 && stop > 0 {
-                                debug!("Found programme #{} for channel {}: start={}, stop={}", 
-                                    programme_count, channel_id, 
-                                    chrono::DateTime::from_timestamp_millis(start).unwrap_or_default(),
-                                    chrono::DateTime::from_timestamp_millis(stop).unwrap_or_default());
                                 current_channel_id = Some(channel_id);
                                 current_program = Some((start, stop));
                                 title.clear();
                                 desc.clear();
                             } else {
-                                debug!("Skipping programme: channel_id={}, start={}, stop={}", channel_id, start, stop);
+                                if programme_count <= 5 {
+                                    debug!("Skipping programme #{}: channel_id={}, start={}, stop={}", programme_count, channel_id, start, stop);
+                                }
                             }
                         }
                     }
@@ -141,8 +139,20 @@ pub fn parse_epg_from_xmltv(xmltv_content: &str) -> Result<HashMap<u64, Vec<Prog
 fn parse_xmltv_time(time_str: &str) -> Result<i64> {
     // 去掉时区信息
     let time_str = time_str.trim_end_matches(" +0800").trim();
+    
     let format = "%Y%m%d%H%M%S";
-    chrono::DateTime::parse_from_str(time_str, format)
-        .map(|dt| dt.timestamp_millis())
-        .map_err(|e| anyhow!("Failed to parse time '{}': {}", time_str, e))
+    match chrono::NaiveDateTime::parse_from_str(time_str, format) {
+        Ok(naive_dt) => {
+            // 假定为北京时间 (UTC+8)
+            let beijing_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+            let dt = beijing_tz.from_local_datetime(&naive_dt).single()
+                .ok_or_else(|| anyhow!("Ambiguous local time"))?;
+            let timestamp_ms = dt.timestamp_millis();
+            Ok(timestamp_ms)
+        }
+        Err(e) => {
+            debug!("Failed to parse time '{}': {}", time_str, e);
+            Err(anyhow!("Failed to parse time '{}': {}", time_str, e))
+        }
+    }
 }

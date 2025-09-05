@@ -392,11 +392,6 @@ async fn get_epg_from_xmltv_cache() -> Result<HashMap<u64, Vec<Program>>> {
     if let Ok(cache) = MAPPED_XMLTV_CACHE.try_lock() {
         if let Some(ref xmltv_content) = *cache {
             debug!("Using in-memory XMLTV cache, size: {} bytes", xmltv_content.len());
-            // 临时调试：输出XMLTV文件的前500个字符
-            if xmltv_content.len() > 0 {
-                let preview = xmltv_content.chars().take(500).collect::<String>();
-                debug!("XMLTV cache preview: {}", preview);
-            }
             return parse_epg_from_xmltv(xmltv_content);
         }
     }
@@ -405,11 +400,6 @@ async fn get_epg_from_xmltv_cache() -> Result<HashMap<u64, Vec<Program>>> {
     match load_xmltv_cache() {
         Ok(Some(xmltv_content)) => {
             debug!("Loaded XMLTV from file cache, size: {} bytes", xmltv_content.len());
-            // 临时调试：输出XMLTV文件的前500个字符
-            if xmltv_content.len() > 0 {
-                let preview = xmltv_content.chars().take(500).collect::<String>();
-                debug!("XMLTV file preview: {}", preview);
-            }
             // 更新内存缓存
             if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
                 *cache = Some(xmltv_content.clone());
@@ -899,26 +889,9 @@ async fn index() -> impl Responder {
 
 #[get("/xmltv")]
 async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> Result<HttpResponse, Box<dyn std::error::Error>> {
-    debug!("Get EPG");
+    debug!("Get EPG - requesting fresh EPG data");
     
-    // 首先尝试从缓存获取
-    if let Ok(cache) = MAPPED_XMLTV_CACHE.try_lock() {
-        if let Some(ref cached_xmltv) = *cache {
-            debug!("Returning cached XMLTV");
-            return Ok(HttpResponse::Ok().content_type("text/xml").body(cached_xmltv.clone()));
-        }
-    }
-    
-    // 如果没有缓存，尝试从文件加载
-    if let Ok(Some(file_xmltv)) = load_xmltv_cache() {
-        debug!("Loaded XMLTV from file cache");
-        if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
-            *cache = Some(file_xmltv.clone());
-        }
-        return Ok(HttpResponse::Ok().content_type("text/xml").body(file_xmltv));
-    }
-    
-    // 如果都没有，实时生成
+    // /xmltv 端点始终获取最新的EPG数据，不使用缓存
     let scheme = req.connection_info().scheme().to_owned();
     let host = req.connection_info().host().to_owned();
     let extra_xml = match &args.extra_xmltv {
@@ -929,22 +902,10 @@ async fn xmltv_route(args: Data<Args>, req: HttpRequest) -> Result<HttpResponse,
     let mapping = args.channel_mapping.as_ref()
         .map(|s| parse_channel_mapping(s))
         .unwrap_or_default();
-        
-    let channels = get_channels_with_epg(&args, &scheme, &host).await?;
-    let xml = to_xmltv_with_mappings(channels, extra_xml, &mapping).await?;
     
-    // 缓存生成的结果
-    if let Ok(mut cache) = MAPPED_XMLTV_CACHE.try_lock() {
-        *cache = Some(xml.clone());
-        
-        // 异步保存到文件
-        let xml_for_save = xml.clone();
-        tokio::spawn(async move {
-            if let Err(e) = save_xmltv_cache(&xml_for_save) {
-                log::error!("Failed to save XMLTV cache: {}", e);
-            }
-        });
-    }
+    // 实时获取最新的EPG数据（不使用XMLTV缓存）
+    let channels = get_channels(&args, true, &scheme, &host).await?;
+    let xml = to_xmltv_with_mappings(channels, extra_xml, &mapping).await?;
     
     Ok(HttpResponse::Ok().content_type("text/xml").body(xml))
 }
