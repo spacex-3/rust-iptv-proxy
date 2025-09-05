@@ -43,7 +43,8 @@ fn categorize_channel(channel_name: &str) -> String {
 }
 
 pub(crate) fn get_client_with_if(#[allow(unused_variables)] if_name: Option<&str>) -> Result<Client> {
-    let timeout = Duration::new(5, 0);
+    // 增加超时时间到15秒，因为EPG获取可能需要更多时间
+    let timeout = Duration::new(15, 0);
     #[allow(unused_mut)]
     let mut client = Client::builder().timeout(timeout).cookie_store(true);
 
@@ -286,14 +287,48 @@ pub(crate) async fn get_channels(
             params,
         )?;
         let client = client.clone();
-        tasks.spawn(async move { (client.get(url).send().await, channel) });
+        
+        // 使用重试机制来获取EPG
+        tasks.spawn(async move { 
+            let mut last_error = None;
+            let mut result = None;
+            
+            // 最多重试3次
+            for attempt in 1..=3 {
+                match client.get(url.clone()).send().await {
+                    Ok(response) => {
+                        if attempt > 1 {
+                            debug!("✓ '{}' EPG获取在第{}次尝试后成功", channel.name, attempt);
+                        }
+                        result = Some(Ok(response));
+                        break;
+                    }
+                    Err(e) => {
+                        if attempt < 3 {
+                            debug!("✗ '{}' EPG获取第{}次失败，将重试: {}", channel.name, attempt, e);
+                        }
+                        last_error = Some(e);
+                        if attempt < 3 {
+                            // 等待递增的时间后重试（1秒，2秒，3秒...）
+                            tokio::time::sleep(std::time::Duration::from_millis(1000 * attempt)).await;
+                        }
+                    }
+                }
+            }
+            
+            // 如果所有重试都失败，返回最后一个错误
+            let final_result = result.unwrap_or_else(|| Err(last_error.unwrap()));
+            (final_result, channel)
+        });
     }
     let mut channels = vec![];
     let mut failed_channels = 0;
+    let mut successful_channels = 0;
     
     while let Some(result) = tasks.join_next().await {
         match result {
             Ok((Ok(res), mut channel)) => {
+                successful_channels += 1;
                 // 成功获取HTTP响应
                 // 先获取响应文本，用于调试
                 let response_text = res.text().await.unwrap_or_else(|_| "Failed to get response text".to_string());
@@ -327,8 +362,8 @@ pub(crate) async fn get_channels(
                 channels.push(channel);
             }
             Ok((Err(e), channel)) => {
-                // HTTP请求失败
-                warn!("✗ 获取 '{}' 的EPG HTTP请求失败: {}", channel.name, e);
+                // HTTP请求失败（所有重试都失败）
+                warn!("✗ 获取 '{}' 的EPG在3次重试后仍然失败: {}", channel.name, e);
                 channels.push(channel);
                 failed_channels += 1;
             }
@@ -340,8 +375,14 @@ pub(crate) async fn get_channels(
         }
     }
     
+    let total_channels = successful_channels + failed_channels;
+    let channels_with_epg = channels.iter().filter(|ch| !ch.epg.is_empty()).count();
+    
+    info!("EPG获取完成: 成功请求 {}/{} 个频道, 其中 {} 个频道有节目单", 
+        successful_channels, total_channels, channels_with_epg);
+    
     if failed_channels > 0 {
-        warn!("共有 {} 个频道获取EPG失败", failed_channels);
+        warn!("共有 {} 个频道在重试后仍获取EPG失败", failed_channels);
     }
 
     Ok(channels)

@@ -923,7 +923,25 @@
 
         // 更新EPG统计信息
         function updateEpgStats() {
-            const withEpg = channels.filter(ch => ch.epg && ch.epg.length > 0).length;
+            // 计算有EPG的频道数，包括映射的情况
+            const withEpg = channels.filter(channel => {
+                // 检查频道自身是否有EPG
+                if (channel.epg && channel.epg.length > 0) {
+                    return true;
+                }
+                
+                // 检查是否有映射，且映射的源频道有EPG
+                const mappedChannelId = channelMappings.get(channel.id);
+                if (mappedChannelId) {
+                    const mappedChannel = allChannels.find(ch => ch.id === mappedChannelId);
+                    if (mappedChannel && mappedChannel.epg && mappedChannel.epg.length > 0) {
+                        return true;
+                    }
+                }
+                
+                return false;
+            }).length;
+            
             const withoutEpg = channels.length - withEpg;
             const statsElement = document.getElementById('epg-stats');
             if (statsElement) {
