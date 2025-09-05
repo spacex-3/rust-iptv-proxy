@@ -543,6 +543,7 @@
                 <button class="link" onclick="copyToClipboard('xmltv')">📋 复制 EPG 链接</button>
                 <button class="link" onclick="fetchEpg()" id="fetch-epg-btn">📥 获取所有 EPG</button>
                 <button class="link" onclick="regenerateXmltv()" id="regenerate-btn">🔄 重新生成 EPG</button>
+                <button class="link" onclick="clearLogoCache()" id="clear-logo-btn">🖼️ 清空Logo缓存</button>
                 <span id="epg-stats" style="margin-left: 20px; color: #666; font-size: 14px;">加载中...</span>
             </div>
             
@@ -559,6 +560,7 @@
                 <button class="filter-btn active" onclick="filterByEpg('all')" id="epg-all-btn">全部</button>
                 <button class="filter-btn" onclick="filterByEpg('with-epg')" id="epg-with-btn">有节目单</button>
                 <button class="filter-btn" onclick="filterByEpg('without-epg')" id="epg-without-btn">无节目单</button>
+                <button class="filter-btn" onclick="filterByEpg('mapped')" id="epg-mapped-btn">已映射</button>
             </div>
             
             <button class="theme-toggle" onclick="toggleTheme()">
@@ -671,7 +673,7 @@
             currentEpgFilter = epgFilter;
             
             // 更新EPG筛选按钮状态
-            const epgButtons = ['epg-all-btn', 'epg-with-btn', 'epg-without-btn'];
+            const epgButtons = ['epg-all-btn', 'epg-with-btn', 'epg-without-btn', 'epg-mapped-btn'];
             epgButtons.forEach(btnId => {
                 const btn = document.getElementById(btnId);
                 if (btn) {
@@ -690,6 +692,9 @@
                     break;
                 case 'without-epg':
                     activeBtnId = 'epg-without-btn';
+                    break;
+                case 'mapped':
+                    activeBtnId = 'epg-mapped-btn';
                     break;
             }
             if (activeBtnId) {
@@ -713,11 +718,16 @@
             // 再按EPG筛选
             if (currentEpgFilter !== 'all') {
                 filteredChannels = filteredChannels.filter(channel => {
-                    const hasEpg = hasChannelEpg(channel);
-                    if (currentEpgFilter === 'with-epg') {
-                        return hasEpg;
-                    } else if (currentEpgFilter === 'without-epg') {
-                        return !hasEpg;
+                    if (currentEpgFilter === 'mapped') {
+                        // 筛选已映射的频道
+                        return channelMappings.has(channel.id);
+                    } else {
+                        const hasEpg = hasChannelEpg(channel);
+                        if (currentEpgFilter === 'with-epg') {
+                            return hasEpg;
+                        } else if (currentEpgFilter === 'without-epg') {
+                            return !hasEpg;
+                        }
                     }
                     return true;
                 });
@@ -883,6 +893,37 @@
                 } else {
                     const error = await response.text();
                     showToast(`获取失败: ${error}`);
+                }
+            } catch (error) {
+                showToast(`网络错误: ${error.message}`);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        async function clearLogoCache() {
+            const btn = document.getElementById('clear-logo-btn');
+            const originalText = btn.textContent;
+            btn.textContent = '🖼️ 清空中...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/clear-logo-cache', {
+                    method: 'POST',
+                });
+                
+                if (response.ok) {
+                    const result = await response.text();
+                    showToast(result + '，页面将刷新以加载新Logo');
+                    
+                    // 清空后刷新页面以重新加载Logo
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
+                } else {
+                    const error = await response.text();
+                    showToast(`清空失败: ${error}`);
                 }
             } catch (error) {
                 showToast(`网络错误: ${error.message}`);

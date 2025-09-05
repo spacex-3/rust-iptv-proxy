@@ -542,12 +542,14 @@ async fn fetch_all_channels_epg(args: &Args) -> Result<Vec<Channel>> {
 // 定时获取所有EPG数据
 async fn fetch_all_epg_periodically(args: Data<Args>) {
     loop {
-        log::info!("Starting scheduled EPG fetch...");
+        log::info!("Starting scheduled EPG cumulative fetch...");
         
-        // 使用简化版本获取EPG
-        match fetch_all_channels_epg_simple(&args).await {
+        let scheme = "http";
+        let host = &args.bind;
+        
+        // 使用累积式EPG获取
+        match get_channels_with_cumulative_epg(&args, scheme, host).await {
             Ok(channels) => {
-                
                 // 重新生成XMLTV
                 let mapping = args.channel_mapping.as_ref()
                     .map(|s| parse_channel_mapping(s))
@@ -561,7 +563,7 @@ async fn fetch_all_epg_periodically(args: Data<Args>) {
                             if let Err(e) = save_xmltv_cache(&xmltv) {
                                 log::error!("Failed to save XMLTV cache: {}", e);
                             } else {
-                                log::info!("XMLTV regenerated after EPG fetch");
+                                log::info!("XMLTV regenerated after scheduled EPG cumulative fetch");
                             }
                         }
                     }
@@ -571,7 +573,7 @@ async fn fetch_all_epg_periodically(args: Data<Args>) {
                 }
             }
             Err(e) => {
-                log::error!("Failed to fetch EPG data: {}", e);
+                log::error!("Failed to fetch EPG data cumulatively: {}", e);
             }
         }
         
@@ -637,6 +639,34 @@ async fn generate_mapped_xmltv_periodically(args: Data<Args>) {
 
 // 使用前端映射生成XMLTV
 // 累积式获取和合并EPG数据
+// 批量更新Logo缓存
+async fn update_logo_cache(args: &Args, channels: &[Channel]) -> Result<()> {
+    info!("开始批量更新Logo缓存...");
+    
+    let mut updated_count = 0;
+    let mut failed_count = 0;
+    
+    for channel in channels {
+        match get_icon(args, &channel.id.to_string()).await {
+            Ok(icon_data) => {
+                // 更新缓存
+                if let Ok(mut cache) = LOGO_CACHE.try_lock() {
+                    cache.insert(channel.id.to_string(), icon_data);
+                    updated_count += 1;
+                    debug!("✓ 更新频道 '{}' 的Logo缓存", channel.name);
+                }
+            }
+            Err(e) => {
+                debug!("✗ 获取频道 '{}' 的Logo失败: {}", channel.name, e);
+                failed_count += 1;
+            }
+        }
+    }
+    
+    info!("Logo缓存更新完成: 成功{}个, 失败{}个", updated_count, failed_count);
+    Ok(())
+}
+
 async fn get_channels_with_cumulative_epg(args: &Args, scheme: &str, host: &str) -> Result<Vec<Channel>> {
     // 1. 获取基础频道列表（不含EPG）
     let mut base_channels = get_channels(args, false, scheme, host).await?;
@@ -767,7 +797,7 @@ async fn api_cache_status() -> impl Responder {
 
 #[post("/api/fetch-epg")]
 async fn api_fetch_epg(args: Data<Args>) -> impl Responder {
-    debug!("Manual EPG fetch triggered with cumulative update");
+    debug!("Manual EPG fetch triggered with cumulative update and logo cache refresh");
     
     let scheme = "http";
     let host = &args.bind;
@@ -775,7 +805,12 @@ async fn api_fetch_epg(args: Data<Args>) -> impl Responder {
     // 使用累积式EPG获取
     match get_channels_with_cumulative_epg(&args, scheme, host).await {
         Ok(channels) => {
-            // 生成并保存XMLTV
+            // 1. 更新Logo缓存
+            if let Err(e) = update_logo_cache(&args, &channels).await {
+                log::warn!("Logo缓存更新失败: {}", e);
+            }
+            
+            // 2. 生成并保存XMLTV
             let mapping = args.channel_mapping.as_ref()
                 .map(|s| parse_channel_mapping(s))
                 .unwrap_or_default();
@@ -796,7 +831,7 @@ async fn api_fetch_epg(args: Data<Args>) -> impl Responder {
                     let with_epg = channels.iter().filter(|ch| !ch.epg.is_empty()).count();
                     let without_epg = channels.len() - with_epg;
                     
-                    HttpResponse::Ok().json(format!("EPG累积获取成功: {} 个频道有节目单, {} 个频道无节目单", with_epg, without_epg))
+                    HttpResponse::Ok().json(format!("EPG累积获取成功: {} 个频道有节目单, {} 个频道无节目单，Logo缓存已更新", with_epg, without_epg))
                 }
                 Err(e) => {
                     log::error!("Failed to generate XMLTV: {}", e);
@@ -808,6 +843,20 @@ async fn api_fetch_epg(args: Data<Args>) -> impl Responder {
             log::error!("Failed to fetch EPG cumulatively: {}", e);
             HttpResponse::InternalServerError().json(format!("Failed to fetch EPG: {}", e))
         }
+    }
+}
+
+#[post("/api/clear-logo-cache")]
+async fn api_clear_logo_cache() -> impl Responder {
+    debug!("Manual logo cache clear triggered");
+    
+    if let Ok(mut cache) = LOGO_CACHE.try_lock() {
+        let cleared_count = cache.len();
+        cache.clear();
+        info!("Logo缓存已清空: {} 个Logo", cleared_count);
+        HttpResponse::Ok().json(format!("Logo缓存已清空: {} 个Logo", cleared_count))
+    } else {
+        HttpResponse::InternalServerError().json("无法访问Logo缓存")
     }
 }
 
@@ -1263,6 +1312,7 @@ async fn main() -> std::io::Result<()> {
             .service(api_get_channel_mappings)
             .service(api_cache_status)
             .service(api_fetch_epg)
+            .service(api_clear_logo_cache)
             .service(api_regenerate_xmltv)
             .service(xmltv_route)
             .service(epg_xml_cached)
