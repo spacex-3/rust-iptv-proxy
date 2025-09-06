@@ -7,7 +7,7 @@ use actix_files as fs;
 use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, TimeZone, Utc};
 use log::{debug, info, warn, error};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use reqwest::Client;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -42,8 +42,21 @@ static CHANNEL_MAPPINGS: LazyLock<Mutex<HashMap<u64, u64>>> = LazyLock::new(|| M
 static MAPPED_XMLTV_CACHE: Mutex<Option<String>> = Mutex::new(None);
 // Logo缓存，避免重复请求电信服务器
 static LOGO_CACHE: LazyLock<Mutex<HashMap<String, Vec<u8>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+// 播放统计缓存
+static PLAYBACK_RECORDS: LazyLock<Mutex<Vec<PlaybackRecord>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 const MAPPINGS_FILE: &str = "channel_mappings.json";
 const XMLTV_CACHE_FILE: &str = "xmltv_cache.xml";
+const STATS_FILE: &str = "playback_stats.json";
+
+#[derive(Deserialize, Serialize, Clone)]
+struct PlaybackRecord {
+    timestamp: i64,        // 播放开始时间戳(毫秒)
+    client_ip: String,     // 客户端IP
+    channel_id: String,    // 频道ID（从URL解析）
+    channel_name: String,  // 频道名称
+    user_agent: String,    // 用户代理
+    rtsp_url: String,      // 完整RTSP URL
+}
 
 #[derive(Deserialize)]
 struct PlaybillList {
@@ -68,6 +81,116 @@ fn parse_channel_mapping(mapping_str: &str) -> HashMap<String, String> {
         }
     }
     mapping
+}
+
+// 从HttpRequest获取真实客户端IP
+fn get_client_ip(req: &HttpRequest) -> String {
+    // 优先获取X-Real-IP (Lucky传递的真实IP)
+    if let Some(real_ip) = req.headers().get("X-Real-IP") {
+        if let Ok(ip_str) = real_ip.to_str() {
+            return ip_str.to_string();
+        }
+    }
+    
+    // 其次获取X-Forwarded-For的第一个IP
+    if let Some(forwarded) = req.headers().get("X-Forwarded-For") {
+        if let Ok(forwarded_str) = forwarded.to_str() {
+            return forwarded_str.split(',').next().unwrap_or("unknown").trim().to_string();
+        }
+    }
+    
+    // 最后使用连接IP
+    req.connection_info().realip_remote_addr()
+        .unwrap_or("unknown").to_string()
+}
+
+// 从RTSP URL路径提取频道ID
+fn extract_channel_id_from_rtsp_url(rtsp_path: &str) -> String {
+    // 从URL中提取频道ID，基于你的日志格式：
+    // /rtsp/183.59.156.166/PLTV/88888888/224/3221229774/10000100000000060000000008842383_0.smil
+    let path_parts: Vec<&str> = rtsp_path.split('/').collect();
+    
+    // 策略1：倒数第二部分（如：3221229774）
+    if path_parts.len() >= 2 {
+        if let Some(channel_part) = path_parts.get(path_parts.len() - 2) {
+            if channel_part.len() >= 8 && channel_part.chars().all(|c| c.is_digit(10)) {
+                return channel_part.to_string();
+            }
+        }
+    }
+    
+    // 策略2：从最后一部分提取ID（10000100000000060000000008842383_0.smil）
+    if let Some(last_part) = path_parts.last() {
+        if let Some(id_part) = last_part.split('_').next() {
+            if id_part.len() > 10 && id_part.chars().all(|c| c.is_digit(10)) {
+                return id_part.to_string();
+            }
+        }
+    }
+    
+    // 策略3：如果都不行，返回整个路径作为ID
+    rtsp_path.to_string()
+}
+
+// 根据频道ID查找频道名称（增强版 - 支持RTSP ID反向查找）
+async fn get_channel_name_by_id(channel_id: &str, args: &Args) -> String {
+    // 尝试从现有频道列表中找到对应名称
+    match get_channels(args, false, "http", &args.bind).await {
+        Ok(channels) => {
+            // 策略1：精确匹配ID
+            if let Ok(id_num) = channel_id.parse::<u64>() {
+                if let Some(channel) = channels.iter().find(|ch| ch.id == id_num) {
+                    return channel.name.clone();
+                }
+            }
+            
+            // 策略2：从频道的RTSP URL中反向查找（这是关键！）
+            // 分析每个频道的RTSP URL，提取其中的ID与当前channel_id匹配
+            for channel in &channels {
+                if let Some(rtsp_url) = &channel.rtsp.split("/rtsp/").nth(1) {
+                    let rtsp_parts: Vec<&str> = rtsp_url.split('/').collect();
+                    // 检查RTSP URL倒数第二部分是否匹配
+                    if rtsp_parts.len() >= 2 {
+                        if let Some(rtsp_id) = rtsp_parts.get(rtsp_parts.len() - 2) {
+                            if *rtsp_id == channel_id {
+                                return format!("{}(RTSP匹配)", channel.name);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 策略3：尝试匹配channel_id的后8位数字
+            if channel_id.len() >= 8 {
+                let suffix = &channel_id[channel_id.len()-8..];
+                if let Ok(suffix_num) = suffix.parse::<u64>() {
+                    if let Some(channel) = channels.iter().find(|ch| ch.id == suffix_num) {
+                        return format!("{}(通过后缀匹配)", channel.name);
+                    }
+                }
+            }
+            
+            // 策略4：尝试匹配channel_id的前8位数字
+            if channel_id.len() >= 8 {
+                let prefix = &channel_id[0..8];
+                if let Ok(prefix_num) = prefix.parse::<u64>() {
+                    if let Some(channel) = channels.iter().find(|ch| ch.id == prefix_num) {
+                        return format!("{}(通过前缀匹配)", channel.name);
+                    }
+                }
+            }
+            
+            // 策略5：模糊匹配（包含关系）
+            for channel in &channels {
+                if channel_id.contains(&channel.id.to_string()) {
+                    return format!("{}(包含匹配:{})", channel.name, channel.id);
+                }
+            }
+        }
+        Err(_) => {}
+    }
+    
+    format!("未知频道({})", channel_id)
 }
 
 fn find_mapped_channel_id(channel_name: &str, channels: &[Channel], mapping: &HashMap<String, String>) -> u64 {
@@ -95,7 +218,42 @@ fn load_mappings_from_file() -> Result<HashMap<u64, u64>> {
     }
 }
 
-// 保存频道映射到文件
+// 保存播放记录到文件
+fn save_playback_record(record: &PlaybackRecord) -> Result<()> {
+    // 加载现有记录
+    let mut records = load_playback_records()?;
+    
+    // 添加新记录
+    records.push(record.clone());
+    
+    // 只保留最近10000条记录
+    if records.len() > 10000 {
+        let excess = records.len() - 10000;
+        records.drain(0..excess);
+    }
+    
+    // 保存到文件
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(STATS_FILE)?;
+    
+    serde_json::to_writer_pretty(file, &records)?;
+    Ok(())
+}
+
+// 从文件加载播放记录
+fn load_playback_records() -> Result<Vec<PlaybackRecord>> {
+    if StdPath::new(STATS_FILE).exists() {
+        let file = File::open(STATS_FILE)?;
+        let records: Vec<PlaybackRecord> = serde_json::from_reader(file)
+            .unwrap_or_else(|_| Vec::new());
+        Ok(records)
+    } else {
+        Ok(Vec::new())
+    }
+}
 fn save_mappings_to_file(mappings: &HashMap<u64, u64>) -> Result<()> {
     let file = OpenOptions::new()
         .write(true)
@@ -727,6 +885,65 @@ async fn to_xmltv_with_mappings<R: Read>(
     to_xmltv(channels, extra, mapping)
 }
 
+#[get("/api/playback-stats")]
+async fn api_playback_stats() -> impl Responder {
+    debug!("Get playback statistics");
+    
+    match load_playback_records() {
+        Ok(records) => HttpResponse::Ok().json(records),
+        Err(e) => HttpResponse::InternalServerError().json(format!("Failed to load playback records: {}", e))
+    }
+}
+
+#[get("/api/playback-summary")]
+async fn api_playback_summary() -> impl Responder {
+    debug!("Get playback summary");
+    
+    match load_playback_records() {
+        Ok(records) => {
+            let total_plays = records.len();
+            let unique_channels: std::collections::HashSet<_> = records.iter().map(|r| &r.channel_id).collect();
+            let unique_ips: std::collections::HashSet<_> = records.iter().map(|r| &r.client_ip).collect();
+            
+            // 最近24小时的播放
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+            let last_24h = now - (24 * 60 * 60 * 1000);
+            let recent_plays = records.iter().filter(|r| r.timestamp > last_24h).count();
+            
+            let summary = serde_json::json!({
+                "total_plays": total_plays,
+                "unique_channels": unique_channels.len(),
+                "unique_ips": unique_ips.len(),
+                "recent_24h_plays": recent_plays,
+                "first_play": records.first().map(|r| r.timestamp),
+                "last_play": records.last().map(|r| r.timestamp)
+            });
+            
+            HttpResponse::Ok().json(summary)
+        }
+        Err(e) => HttpResponse::InternalServerError().json(format!("Failed to load playback records: {}", e))
+    }
+}
+
+#[post("/api/clear-stats")]
+async fn api_clear_stats() -> impl Responder {
+    debug!("Clear playback statistics");
+    
+    // 清空内存记录
+    if let Ok(mut records) = PLAYBACK_RECORDS.try_lock() {
+        records.clear();
+    }
+    
+    // 删除文件
+    match std::fs::remove_file(STATS_FILE) {
+        Ok(_) => HttpResponse::Ok().json("Statistics cleared successfully"),
+        Err(_) => {
+            // 如果文件不存在，也算成功
+            HttpResponse::Ok().json("Statistics cleared (no file to remove)")
+        }
+    }
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 struct ChannelMapping {
     from_id: u64,
@@ -991,7 +1208,7 @@ async fn api_channels_with_epg(args: Data<Args>, req: HttpRequest) -> impl Respo
 
 #[get("/")]
 async fn index() -> impl Responder {
-    fs::NamedFile::open_async("/static/index.html").await
+    fs::NamedFile::open_async("static/index.html").await
 }
 
 #[get("/xmltv")]
@@ -1174,16 +1391,68 @@ async fn rtsp(
     args: Data<Args>,
     mut path: Path<String>,
     mut params: Query<BTreeMap<String, String>>,
+    req: HttpRequest,
 ) -> impl Responder {
     let path = &mut *path;
     let params = &mut *params;
     let mut params = params.iter().map(|(k, v)| format!("{}={}", k, v));
     let param = params.next().unwrap_or("".to_string());
     let param = params.fold(param, |o, q| format!("{}&{}", o, q));
-    HttpResponse::Ok().streaming(proxy::rtsp(
-        format!("rtsp://{}?{}", path, param),
-        args.interface.clone(),
-    ))
+    
+    // 记录播放统计
+    let client_ip = get_client_ip(&req);
+    let user_agent = req.headers()
+        .get("user-agent")
+        .and_then(|ua| ua.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    
+    let rtsp_url = format!("rtsp://{}?{}", path, param);
+    let channel_id = extract_channel_id_from_rtsp_url(path);
+    
+    // 异步获取频道名称并记录播放统计
+    let args_clone = args.clone();
+    let channel_id_clone = channel_id.clone();
+    let client_ip_clone = client_ip.clone();
+    let user_agent_clone = user_agent.clone();
+    let rtsp_url_clone = rtsp_url.clone();
+    
+    tokio::spawn(async move {
+        let channel_name = get_channel_name_by_id(&channel_id_clone, &args_clone).await;
+        
+        let record = PlaybackRecord {
+            timestamp: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64,
+            client_ip: client_ip_clone,
+            channel_id: channel_id_clone,
+            channel_name,
+            user_agent: user_agent_clone,
+            rtsp_url: rtsp_url_clone,
+        };
+        
+        // 记录到内存
+        if let Ok(mut records) = PLAYBACK_RECORDS.try_lock() {
+            records.push(record.clone());
+            
+            // 只保留最近1000条记录
+            if records.len() > 1000 {
+                let excess = records.len() - 1000;
+                records.drain(0..excess);
+            }
+        }
+        
+        // 保存到文件
+        if let Err(e) = save_playback_record(&record) {
+            error!("Failed to save playback record: {}", e);
+        }
+        
+        info!("📺 播放记录: IP={}, 频道={}, UserAgent={}", 
+              record.client_ip, record.channel_name, record.user_agent);
+    });
+    
+    HttpResponse::Ok().streaming(proxy::rtsp(rtsp_url, args.interface.clone()))
 }
 
 #[get("/udp/{addr}")]
@@ -1229,11 +1498,24 @@ async fn main() -> std::io::Result<()> {
     // 使用 argh 直接从环境解析参数
     let args: Args = argh::from_env();
 
-    // 启动时加载映射
+    // 加载映射配置
     if let Ok(file_mappings) = load_mappings_from_file() {
         if let Ok(mut mappings) = CHANNEL_MAPPINGS.try_lock() {
             *mappings = file_mappings;
             log::info!("Loaded {} channel mappings from file", mappings.len());
+        }
+    }
+    
+    // 加载播放统计记录
+    match load_playback_records() {
+        Ok(records) => {
+            if let Ok(mut playback_records) = PLAYBACK_RECORDS.try_lock() {
+                *playback_records = records.clone();
+                log::info!("Loaded {} playback records from file", records.len());
+            }
+        }
+        Err(e) => {
+            log::warn!("Failed to load playback records: {}", e);
         }
     }
     
@@ -1314,13 +1596,16 @@ async fn main() -> std::io::Result<()> {
             .service(api_fetch_epg)
             .service(api_clear_logo_cache)
             .service(api_regenerate_xmltv)
+            .service(api_playback_stats)
+            .service(api_playback_summary)
+            .service(api_clear_stats)
             .service(xmltv_route)
             .service(epg_xml_cached)
             .service(playlist)
             .service(logo)
             .service(rtsp)
             .service(udp)
-            .service(fs::Files::new("/static", "/static").show_files_listing())
+            .service(fs::Files::new("/static", "static").show_files_listing())
             .app_data(args)
     })
     .bind(bind_addr)?

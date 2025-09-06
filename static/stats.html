@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPTV 播放统计</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        body.dark-mode {
+            background: #1a1a1a;
+            color: #e0e0e0;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        body.dark-mode .header {
+            background: linear-gradient(135deg, #4a5568 0%, #2d3748 100%);
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 300;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            font-size: 14px;
+        }
+
+        .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-1px);
+        }
+
+        .btn.danger {
+            background: rgba(244, 67, 54, 0.8);
+        }
+
+        .btn.danger:hover {
+            background: rgba(244, 67, 54, 1);
+        }
+
+        .theme-toggle {
+            background: none;
+            border: 2px solid rgba(255,255,255,0.3);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 14px;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .theme-toggle:hover {
+            background: rgba(255,255,255,0.1);
+            border-color: rgba(255,255,255,0.5);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            text-align: center;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        body.dark-mode .stat-card {
+            background: #2d3748;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        body.dark-mode .stat-label {
+            color: #cbd5e0;
+        }
+
+        .records-section {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+            overflow: hidden;
+            margin-bottom: 30px;
+        }
+
+        body.dark-mode .records-section {
+            background: #2d3748;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        .section-header {
+            padding: 20px;
+            border-bottom: 2px solid #f0f0f0;
+            background: #f8f9fa;
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        body.dark-mode .section-header {
+            background: #4a5568;
+            border-bottom-color: #4a5568;
+            color: #f7fafc;
+        }
+
+        .records-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .records-table th,
+        .records-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        body.dark-mode .records-table th,
+        body.dark-mode .records-table td {
+            border-bottom-color: #4a5568;
+        }
+
+        .records-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+
+        body.dark-mode .records-table th {
+            background: #4a5568;
+            color: #f7fafc;
+        }
+
+        .records-table tbody tr:hover {
+            background: #f8f9fa;
+        }
+
+        body.dark-mode .records-table tbody tr:hover {
+            background: #4a5568;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+            font-size: 1.1rem;
+        }
+
+        body.dark-mode .loading {
+            color: #cbd5e0;
+        }
+
+        .error {
+            text-align: center;
+            padding: 50px;
+            color: #e74c3c;
+            font-size: 1.1rem;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .time-cell {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9rem;
+        }
+
+        .ip-cell {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-weight: bold;
+        }
+
+        .location-cell {
+            font-size: 0.85rem;
+            color: #666;
+            max-width: 200px;
+        }
+
+        body.dark-mode .location-cell {
+            color: #cbd5e0;
+        }
+
+        .location-loading {
+            color: #999;
+            font-style: italic;
+        }
+
+        .channel-cell {
+            font-weight: 600;
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #28a745;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+            z-index: 1000;
+            font-weight: 500;
+        }
+
+        .toast.show {
+            transform: translateX(0);
+        }
+
+        .toast.error {
+            background: #dc3545;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 15px;
+            }
+            
+            .header {
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .controls {
+                justify-content: center;
+            }
+            
+            .stats-grid {
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            }
+
+            .records-table {
+                font-size: 0.8rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>📊 IPTV 播放统计</h1>
+                <p>实时播放记录与统计分析</p>
+            </div>
+            
+            <div class="controls">
+                <button class="btn" onclick="refreshStats()">🔄 刷新</button>
+                <button class="btn" onclick="window.open('/', '_blank')">🏠 返回主页</button>
+                <button class="btn danger" onclick="clearStats()" id="clear-btn">🗑️ 清空统计</button>
+                <button class="theme-toggle" onclick="toggleTheme()">
+                    <span id="theme-icon">🌙</span>
+                    <span id="theme-text">深色模式</span>
+                </button>
+            </div>
+        </div>
+        
+        <div class="stats-grid" id="stats-grid">
+            <div class="loading">
+                <div class="spinner"></div>
+                正在加载统计数据...
+            </div>
+        </div>
+        
+        <div class="records-section">
+            <div class="section-header">
+                📺 播放记录
+            </div>
+            <div id="records-container">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    正在加载播放记录...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast">操作成功！</div>
+
+    <script>
+        let isDarkMode = false;
+        const ipLocationCache = new Map(); // IP归属地缓存
+
+        // 查询IP归属地
+        async function getIpLocation(ip) {
+            // 跳过本地IP
+            if (ip === '127.0.0.1' || ip === 'localhost' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+                return '本地网络';
+            }
+
+            // 从缓存获取
+            if (ipLocationCache.has(ip)) {
+                return ipLocationCache.get(ip);
+            }
+
+            try {
+                const response = await fetch(`https://api.vore.top/api/IPdata?ip=${ip}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.code === 200 && data.adcode && data.adcode.o) {
+                        const location = data.adcode.o;
+                        ipLocationCache.set(ip, location); // 缓存结果
+                        return location;
+                    }
+                }
+            } catch (error) {
+                console.warn('IP归属地查询失败:', error);
+            }
+
+            // 查询失败时的默认值
+            const fallbackLocation = '未知地区';
+            ipLocationCache.set(ip, fallbackLocation);
+            return fallbackLocation;
+        }
+
+        // 初始化主题
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                enableDarkMode();
+            }
+        }
+
+        function toggleTheme() {
+            if (isDarkMode) {
+                disableDarkMode();
+            } else {
+                enableDarkMode();
+            }
+        }
+
+        function enableDarkMode() {
+            document.body.classList.add('dark-mode');
+            document.getElementById('theme-icon').textContent = '☀️';
+            document.getElementById('theme-text').textContent = '浅色模式';
+            localStorage.setItem('theme', 'dark');
+            isDarkMode = true;
+        }
+
+        function disableDarkMode() {
+            document.body.classList.remove('dark-mode');
+            document.getElementById('theme-icon').textContent = '🌙';
+            document.getElementById('theme-text').textContent = '深色模式';
+            localStorage.setItem('theme', 'light');
+            isDarkMode = false;
+        }
+
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = isError ? 'toast error' : 'toast';
+            
+            setTimeout(() => {
+                toast.classList.add('show');
+            }, 100);
+            
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        async function loadSummary() {
+            console.log('Loading summary...');
+            try {
+                const response = await fetch('/api/playback-summary');
+                if (!response.ok) {
+                    console.error('Summary API error:', response.status, response.statusText);
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const summary = await response.json();
+                console.log('Summary loaded:', summary);
+                renderSummary(summary);
+            } catch (error) {
+                console.error('Failed to load summary:', error);
+                document.getElementById('stats-grid').innerHTML = 
+                    `<div class="error">加载统计摘要失败: ${error.message}<br><small>请检查控制台日志</small></div>`;
+            }
+        }
+
+        function renderSummary(summary) {
+            console.log('Rendering summary:', summary);
+            const statsGrid = document.getElementById('stats-grid');
+            statsGrid.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${summary.total_plays}</div>
+                    <div class="stat-label">总播放次数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${summary.unique_channels}</div>
+                    <div class="stat-label">播放过的频道</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${summary.unique_ips}</div>
+                    <div class="stat-label">不同观看IP</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${summary.recent_24h_plays}</div>
+                    <div class="stat-label">24小时内播放</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${summary.first_play ? formatTime(summary.first_play) : '无'}</div>
+                    <div class="stat-label">首次播放时间</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${summary.last_play ? formatTime(summary.last_play) : '无'}</div>
+                    <div class="stat-label">最近播放时间</div>
+                </div>
+            `;
+        }
+
+        async function loadRecords() {
+            console.log('Loading records...');
+            try {
+                const response = await fetch('/api/playback-stats');
+                if (!response.ok) {
+                    console.error('Records API error:', response.status, response.statusText);
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const records = await response.json();
+                console.log('Records loaded:', records.length, 'items');
+                renderRecords(records);
+            } catch (error) {
+                console.error('Failed to load records:', error);
+                document.getElementById('records-container').innerHTML = 
+                    `<div class="error">加载播放记录失败: ${error.message}<br><small>请检查控制台日志</small></div>`;
+            }
+        }
+
+        function renderRecords(records) {
+            const container = document.getElementById('records-container');
+            
+            if (records.length === 0) {
+                container.innerHTML = '<div class="error">暂无播放记录</div>';
+                return;
+            }
+
+            // 按时间降序排列（最新的在前面）
+            records.sort((a, b) => b.timestamp - a.timestamp);
+
+            const table = `
+                <table class="records-table">
+                    <thead>
+                        <tr>
+                            <th>播放时间</th>
+                            <th>客户端IP</th>
+                            <th>归属地</th>
+                            <th>频道名称</th>
+                            <th>频道ID</th>
+                            <th>播放器</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${records.map((record, index) => `
+                            <tr>
+                                <td class="time-cell">${formatDateTime(record.timestamp)}</td>
+                                <td class="ip-cell">${record.client_ip}</td>
+                                <td class="location-cell" id="location-${index}">
+                                    <span class="location-loading">查询中...</span>
+                                </td>
+                                <td class="channel-cell">${record.channel_name}</td>
+                                <td>${record.channel_id}</td>
+                                <td title="${record.user_agent}">${extractUserAgent(record.user_agent)}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+
+            container.innerHTML = table;
+
+            // 异步查询每个IP的归属地
+            records.forEach(async (record, index) => {
+                try {
+                    const location = await getIpLocation(record.client_ip);
+                    const locationCell = document.getElementById(`location-${index}`);
+                    if (locationCell) {
+                        locationCell.innerHTML = location;
+                        locationCell.className = 'location-cell';
+                    }
+                } catch (error) {
+                    console.warn('IP归属地查询失败:', error);
+                    const locationCell = document.getElementById(`location-${index}`);
+                    if (locationCell) {
+                        locationCell.innerHTML = '查询失败';
+                        locationCell.className = 'location-cell';
+                    }
+                }
+            });
+        }
+
+        function formatTime(timestamp) {
+            return new Date(timestamp).toLocaleString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function formatDateTime(timestamp) {
+            return new Date(timestamp).toLocaleString('zh-CN', {
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+        }
+
+        function extractUserAgent(userAgent) {
+            // 提取播放器名称
+            if (userAgent.includes('AptvPlayer')) {
+                return 'APTV播放器';
+            } else if (userAgent.includes('VLC')) {
+                return 'VLC播放器';
+            } else if (userAgent.includes('Chrome')) {
+                return 'Chrome浏览器';
+            } else if (userAgent.includes('Safari')) {
+                return 'Safari浏览器';
+            } else if (userAgent.includes('Firefox')) {
+                return 'Firefox浏览器';
+            } else {
+                return userAgent.split(' ')[0] || '未知播放器';
+            }
+        }
+
+        async function clearStats() {
+            const btn = document.getElementById('clear-btn');
+            const originalText = btn.textContent;
+            
+            if (!confirm('确定要清空所有播放统计数据吗？此操作不可恢复！')) {
+                return;
+            }
+            
+            btn.textContent = '🗑️ 清空中...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch('/api/clear-stats', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    showToast('统计数据已清空');
+                    refreshStats();
+                } else {
+                    const error = await response.text();
+                    showToast(`清空失败: ${error}`, true);
+                }
+            } catch (error) {
+                showToast(`网络错误: ${error.message}`, true);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        async function refreshStats() {
+            await Promise.all([loadSummary(), loadRecords()]);
+        }
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initTheme();
+            refreshStats();
+            
+            // 每30秒自动刷新一次
+            setInterval(refreshStats, 30000);
+        });
+    </script>
+</body>
+</html>
