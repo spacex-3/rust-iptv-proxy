@@ -1,3 +1,47 @@
-/target
-/.vscode
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE files
+/.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+logs/
+/logs
+
+# Data files (sensitive information)
+# 保留data目录结构，但忽略实际数据文件
+/data/playback_stats.json
+/data/channel_mappings.json
+/data/xmltv_cache.xml
+
+# Keep README in data directory
+!/data/README.md
+
+# Backup files
+/backups/
+*.tar.gz
+*.zip
+
+# Environment files
+.env
+.env.local
+.env.production
+
+# Runtime files
+*.pid

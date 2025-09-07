@@ -360,39 +360,6 @@
 
     <script>
         let isDarkMode = false;
-        const ipLocationCache = new Map(); // IP归属地缓存
-
-        // 查询IP归属地
-        async function getIpLocation(ip) {
-            // 跳过本地IP
-            if (ip === '127.0.0.1' || ip === 'localhost' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
-                return '本地网络';
-            }
-
-            // 从缓存获取
-            if (ipLocationCache.has(ip)) {
-                return ipLocationCache.get(ip);
-            }
-
-            try {
-                const response = await fetch(`https://api.vore.top/api/IPdata?ip=${ip}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data.code === 200 && data.adcode && data.adcode.o) {
-                        const location = data.adcode.o;
-                        ipLocationCache.set(ip, location); // 缓存结果
-                        return location;
-                    }
-                }
-            } catch (error) {
-                console.warn('IP归属地查询失败:', error);
-            }
-
-            // 查询失败时的默认值
-            const fallbackLocation = '未知地区';
-            ipLocationCache.set(ip, fallbackLocation);
-            return fallbackLocation;
-        }
 
         // 初始化主题
         function initTheme() {
@@ -537,9 +504,7 @@
                             <tr>
                                 <td class="time-cell">${formatDateTime(record.timestamp)}</td>
                                 <td class="ip-cell">${record.client_ip}</td>
-                                <td class="location-cell" id="location-${index}">
-                                    <span class="location-loading">查询中...</span>
-                                </td>
+                                <td class="location-cell">${record.ip_location || '未知地区'}</td>
                                 <td class="channel-cell">${record.channel_name}</td>
                                 <td>${record.channel_id}</td>
                                 <td title="${record.user_agent}">${extractUserAgent(record.user_agent)}</td>
@@ -550,25 +515,6 @@
             `;
 
             container.innerHTML = table;
-
-            // 异步查询每个IP的归属地
-            records.forEach(async (record, index) => {
-                try {
-                    const location = await getIpLocation(record.client_ip);
-                    const locationCell = document.getElementById(`location-${index}`);
-                    if (locationCell) {
-                        locationCell.innerHTML = location;
-                        locationCell.className = 'location-cell';
-                    }
-                } catch (error) {
-                    console.warn('IP归属地查询失败:', error);
-                    const locationCell = document.getElementById(`location-${index}`);
-                    if (locationCell) {
-                        locationCell.innerHTML = '查询失败';
-                        locationCell.className = 'location-cell';
-                    }
-                }
-            });
         }
 
         function formatTime(timestamp) {

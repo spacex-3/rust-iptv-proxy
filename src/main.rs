@@ -56,6 +56,8 @@ struct PlaybackRecord {
     channel_name: String,  // 频道名称
     user_agent: String,    // 用户代理
     rtsp_url: String,      // 完整RTSP URL
+    #[serde(default)]
+    ip_location: Option<String>, // IP地理位置
 }
 
 #[derive(Deserialize)]
@@ -102,6 +104,56 @@ fn get_client_ip(req: &HttpRequest) -> String {
     // 最后使用连接IP
     req.connection_info().realip_remote_addr()
         .unwrap_or("unknown").to_string()
+}
+
+// 获取IP地理位置信息
+async fn get_ip_location(ip: &str) -> Option<String> {
+    // 跳过本地IP
+    if ip == "127.0.0.1" || ip == "localhost" || ip.starts_with("192.168.") || 
+       ip.starts_with("10.") || ip.starts_with("172.") {
+        return Some("本地网络".to_string());
+    }
+    
+    // 如果IP为unknown或其他特殊值，直接返回
+    if ip == "unknown" || ip.is_empty() {
+        return Some("未知地区".to_string());
+    }
+    
+    // 尝试获取地理位置
+    match get_client_with_if(None) {
+        Ok(client) => {
+            let url = format!("https://api.vore.top/api/IPdata?ip={}", ip);
+            match client.get(&url).send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        match response.json::<serde_json::Value>().await {
+                            Ok(data) => {
+                                if let Some(adcode) = data.get("adcode") {
+                                    if let Some(location) = adcode.get("o") {
+                                        if let Some(location_str) = location.as_str() {
+                                            return Some(location_str.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                debug!("Failed to parse IP location response for {}: {}", ip, e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to request IP location for {}: {}", ip, e);
+                }
+            }
+        }
+        Err(e) => {
+            debug!("Failed to create HTTP client for IP location: {}", e);
+        }
+    }
+    
+    // 如果获取失败，返回未知地区
+    Some("未知地区".to_string())
 }
 
 // 从RTSP URL路径提取频道ID
@@ -1420,6 +1472,9 @@ async fn rtsp(
     tokio::spawn(async move {
         let channel_name = get_channel_name_by_id(&channel_id_clone, &args_clone).await;
         
+        // 获取IP地理位置
+        let ip_location = get_ip_location(&client_ip_clone).await;
+        
         let record = PlaybackRecord {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -1430,6 +1485,7 @@ async fn rtsp(
             channel_name,
             user_agent: user_agent_clone,
             rtsp_url: rtsp_url_clone,
+            ip_location,
         };
         
         // 记录到内存
@@ -1448,8 +1504,8 @@ async fn rtsp(
             error!("Failed to save playback record: {}", e);
         }
         
-        info!("📺 播放记录: IP={}, 频道={}, UserAgent={}", 
-              record.client_ip, record.channel_name, record.user_agent);
+        info!("📺 播放记录: IP={}, 位置={:?}, 频道={}, UserAgent={}", 
+              record.client_ip, record.ip_location, record.channel_name, record.user_agent);
     });
     
     HttpResponse::Ok().streaming(proxy::rtsp(rtsp_url, args.interface.clone()))

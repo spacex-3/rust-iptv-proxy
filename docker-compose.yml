@@ -17,6 +17,11 @@ services:
       - RUST_LOG=info
     restart: unless-stopped
     volumes:
+      - ./data:/app/data
       - ./logs:/app/logs
+      # 数据文件映射 - 便于备份和迁移
+      - ./data/playback_stats.json:/app/playback_stats.json
+      - ./data/channel_mappings.json:/app/channel_mappings.json
+      - ./data/xmltv_cache.xml:/app/xmltv_cache.xml
     # 如果需要 UDP 多播或特定网络接口，请启用 host 网络模式
     # network_mode: host
