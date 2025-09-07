@@ -1260,7 +1260,7 @@ async fn api_channels_with_epg(args: Data<Args>, req: HttpRequest) -> impl Respo
 
 #[get("/")]
 async fn index() -> impl Responder {
-    fs::NamedFile::open_async("static/index.html").await
+    fs::NamedFile::open_async("/static/index.html").await
 }
 
 #[get("/xmltv")]
@@ -1661,7 +1661,7 @@ async fn main() -> std::io::Result<()> {
             .service(logo)
             .service(rtsp)
             .service(udp)
-            .service(fs::Files::new("/static", "static").show_files_listing())
+            .service(fs::Files::new("/static", "/static").show_files_listing())
             .app_data(args)
     })
     .bind(bind_addr)?

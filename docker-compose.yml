@@ -1,8 +1,9 @@
 version: '3.8'
 
 services:
-  iptv-proxy:
+  rust-iptv-proxy:
     image: lisankai93/rust-iptv-proxy:latest
+    container_name: rust-iptv-proxy
     ports:
       - "7878:7878"
     command: [
@@ -10,18 +11,16 @@ services:
       "--passwd", "31253530",
       "--mac", "50:01:6b:33:46:be",
       "--bind", "0.0.0.0:7878",
-      "--rtsp-proxy",
-      "--channel-mapping", "CCTV -1综合高清=CCTV-1综合,CCTV -2财经高清=CCTV-2财经,CCTV -7军事农业高清=CCTV-7国防军事,CCTV-10科教高清=CCTV-10科教,CCTV-5超清=CCTV-5体育,CCTV-1高清4M=CCTV-1综合,CCTV1-1M开机标清=CCTV-1综合"
+      "--rtsp-proxy"
     ]
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=debug
     restart: unless-stopped
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      # 数据文件映射 - 便于备份和迁移
-      - ./data/playback_stats.json:/app/playback_stats.json
-      - ./data/channel_mappings.json:/app/channel_mappings.json
-      - ./data/xmltv_cache.xml:/app/xmltv_cache.xml
+      # 映射数据目录到容器的/data
+      - ./data:/data
+      - ./logs:/logs
+      # 移除 static 映射，使用 Docker 镜像中内置的静态文件
+    working_dir: /data
     # 如果需要 UDP 多播或特定网络接口，请启用 host 网络模式
     # network_mode: host
