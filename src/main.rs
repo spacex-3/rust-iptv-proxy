@@ -2,12 +2,17 @@ use actix_web::{
     get, post,
     web::{Data, Path, Query, Json},
     App, HttpRequest, HttpResponse, HttpServer, Responder,
+    dev::{ServiceRequest, ServiceResponse},
+    middleware::from_fn,
+    body::MessageBody,
+    Error,
 };
 use actix_files as fs;
 use anyhow::{anyhow, Result};
 use chrono::{FixedOffset, TimeZone, Utc};
 use log::{debug, info, warn, error};
 use serde::{Deserialize, Serialize};
+use base64::{engine::general_purpose, Engine as _};
 use reqwest::Client;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -1547,6 +1552,66 @@ Options:
     exit(0);
 }
 
+// Basic Auth 认证中间件
+async fn auth_middleware(
+    req: ServiceRequest,
+    next: impl Fn(ServiceRequest) -> futures_util::future::LocalBoxFuture<'static, Result<ServiceResponse<impl MessageBody>, Error>> + 'static,
+) -> Result<ServiceResponse<impl MessageBody>, Error> {
+    let path = req.path();
+    
+    // 检查是否是需要保持开放的 IPTV API 端点
+    let open_paths = [
+        "/playlist",
+        "/epg.xml", 
+        "/xmltv",
+        "/logo/",
+        "/rtsp/",
+        "/udp/",
+    ];
+    
+    let is_open_path = open_paths.iter().any(|&open_path| {
+        path == open_path || path.starts_with(open_path)
+    });
+    
+    // 如果是开放的端点，直接通过
+    if is_open_path {
+        return next(req).await;
+    }
+    
+    // 对于其他端点（web 管理界面和 API），需要进行认证
+    let auth_header = req.headers().get("authorization");
+    
+    if let Some(auth_value) = auth_header {
+        if let Ok(auth_str) = auth_value.to_str() {
+            if auth_str.starts_with("Basic ") {
+                let encoded = &auth_str[6..]; // 去掉 "Basic " 前缀
+                if let Ok(decoded) = general_purpose::STANDARD.decode(encoded) {
+                    if let Ok(credentials) = String::from_utf8(decoded) {
+                        let parts: Vec<&str> = credentials.split(':').collect();
+                        if parts.len() == 2 {
+                            let username = parts[0];
+                            let password = parts[1];
+                            
+                            // 简单的用户名密码验证
+                            // 您可以根据需要修改这些凭据
+                            if username == "admin" && password == "iptv2024" {
+                                return next(req).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 认证失败，返回 401 Unauthorized
+    let response = HttpResponse::Unauthorized()
+        .insert_header(("WWW-Authenticate", "Basic realm=\"IPTV Proxy Management\""))
+        .body("认证失败，请提供正确的用户名和密码");
+    
+    Ok(req.into_response(response))
+}
+
 #[actix_web::main] // or #[tokio::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -1642,6 +1707,7 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(move || {
         let args = args_data.clone();
         App::new()
+            .wrap(from_fn(auth_middleware))
             .service(index)
             .service(api_channels)
             .service(api_channels_with_epg)
