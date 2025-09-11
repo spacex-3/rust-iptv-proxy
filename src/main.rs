@@ -125,19 +125,35 @@ async fn get_ip_location(ip: &str) -> Option<String> {
         return Some("未知地区".to_string());
     }
     
-    // 尝试获取地理位置
+    // 使用 ip-api.com 获取地理位置信息
     match get_client_with_if(None) {
         Ok(client) => {
-            let url = format!("https://api.vore.top/api/IPdata?ip={}", ip);
+            let url = format!("http://ip-api.com/json/{}?lang=zh-CN", ip);
             match client.get(&url).send().await {
                 Ok(response) => {
                     if response.status().is_success() {
                         match response.json::<serde_json::Value>().await {
                             Ok(data) => {
-                                if let Some(adcode) = data.get("adcode") {
-                                    if let Some(location) = adcode.get("o") {
-                                        if let Some(location_str) = location.as_str() {
-                                            return Some(location_str.to_string());
+                                // 检查API调用是否成功
+                                if let Some(status) = data.get("status") {
+                                    if status.as_str() == Some("success") {
+                                        // 提取 regionName, city, isp
+                                        let region_name = data.get("regionName")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let city = data.get("city")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let isp = data.get("isp")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        
+                                        // 组合格式: "regionName-city-isp"
+                                        let location = format!("{}-{}-{}", region_name, city, isp);
+                                        
+                                        // 如果信息不完整，尝试使用可用的信息
+                                        if !region_name.is_empty() || !city.is_empty() || !isp.is_empty() {
+                                            return Some(location);
                                         }
                                     }
                                 }
@@ -146,6 +162,8 @@ async fn get_ip_location(ip: &str) -> Option<String> {
                                 debug!("Failed to parse IP location response for {}: {}", ip, e);
                             }
                         }
+                    } else {
+                        debug!("IP location API returned error status for {}: {}", ip, response.status());
                     }
                 }
                 Err(e) => {
