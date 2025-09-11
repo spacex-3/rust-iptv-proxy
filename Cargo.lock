@@ -1261,6 +1261,7 @@ dependencies = [
  "anyhow",
  "argh",
  "async-stream",
+ "base64 0.22.1",
  "chrono",
  "des",
  "ecb",
